@@ -108,8 +108,12 @@
 - [x] Scrollable error display in chat (200px height)
 - [x] Error messages show expected vs actual response
 - [x] Settings page shows full validation errors
-- [ ] Connect tool use responses in conversation loop
-- [ ] Handle tool_use content blocks from Claude
+- [x] Connect tool use responses in conversation loop
+- [x] Handle tool_use content blocks from Claude
+- [x] Serialize Date/Decimal for JSON tool responses
+- [x] Iterative parse plan refinement
+- [x] Enhanced system prompt with target schema
+- [x] Settlement row pattern documentation
 
 ## Phase 4: Advanced Features
 
@@ -177,11 +181,12 @@
 - [x] Performance optimization (100x faster)
 - [x] X-axis shows year labels
 - [x] Comprehensive USD debug logging
-- [ ] Transaction grouping (double-entry)
+- [x] Transaction grouping (double-entry) - Phase 1 complete
 - [ ] ViewPreferences for persistent selection/order
 - [ ] Drag-reorder asset lists
+- [ ] Migrate existing views to double-entry models
 
-### 14. Polish and optimization
+### 14. Polish and optimization ✅
 - [x] Process all CSV rows (no 100-row limit)
 - [x] Chunked import for large files
 - [x] Implement progress tracking infrastructure
@@ -189,9 +194,35 @@
 - [x] Re-import functionality
 - [x] Clear all imports per account
 - [x] Parse plan reuse per account
+- [x] Fix keychain password prompts (switched to UserDefaults)
+- [x] API key migration from Keychain to UserDefaults
+- [x] Clear double-entry transactions when clearing account
 - [ ] Add export capabilities
 - [ ] Create onboarding flow
-- [ ] Fix keychain password prompts (still occurring)
+
+### 15. Double-Entry Bookkeeping System (85%)
+- [x] Create Transaction model (container for grouped rows)
+- [x] Create JournalEntry model (individual debit/credit legs)
+- [x] Define AccountType taxonomy (Asset, Cash, Income, Expense, Liability, Equity)
+- [x] Implement TransactionBuilder (CSV row grouping)
+- [x] Build settlement row detection logic
+- [x] Create ParseEngineV2 with double-entry support
+- [x] Implement balance verification (debits = credits)
+- [x] Calculate net cash impact per transaction
+- [x] Calculate quantity changes per asset
+- [x] Build transaction patterns (Buy, Sell, Dividend, Transfer, Fee, Interest)
+- [x] Create DoubleEntryTestView (testing interface)
+- [x] Add Transaction/JournalEntry to model container
+- [x] Fix parse plan to preserve metadata.action
+- [x] Enhanced agent prompt for correct field mappings
+- [ ] Complete migration service for existing LedgerEntry data
+- [ ] Update PortfolioValueView to use Transaction model
+- [ ] Update PositionsView to use Transaction model
+- [ ] Update TotalWealthView to use Transaction model
+- [ ] Update BalanceView to use Transaction model
+- [ ] Update AnalyticsView to use Transaction model
+- [ ] Add balance verification UI (show unbalanced transactions)
+- [ ] Deprecate LedgerEntry after full migration
 
 ## Dependencies
 - Tasks 1-3 can be done in parallel

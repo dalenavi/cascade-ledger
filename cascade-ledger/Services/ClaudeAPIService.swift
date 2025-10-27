@@ -53,7 +53,8 @@ class ClaudeAPIService: ObservableObject {
         system: String? = nil,
         maxTokens: Int = 4096,
         temperature: Double = 0.3,
-        stream: Bool = false
+        stream: Bool = false,
+        tools: [ClaudeTool]? = nil
     ) async throws -> ClaudeResponse {
         guard let apiKey = try KeychainService.shared.getClaudeAPIKey() else {
             throw ClaudeAPIError.noAPIKey
@@ -65,7 +66,8 @@ class ClaudeAPIService: ObservableObject {
             temperature: temperature,
             system: system,
             messages: messages,
-            stream: stream
+            stream: stream,
+            tools: tools
         )
 
         return try await sendRequest(request, apiKey: apiKey)

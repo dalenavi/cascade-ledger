@@ -12,6 +12,7 @@ struct DraggableFloatingChatWindow: View {
     @Binding var parsePlan: ParsePlan?
     let account: Account
     let selectedFile: RawFile?
+    let parsePreview: ParsePreview?
     @Binding var messages: [ChatMessage]
     @Binding var showingChat: Bool
 
@@ -23,6 +24,7 @@ struct DraggableFloatingChatWindow: View {
             parsePlan: $parsePlan,
             account: account,
             selectedFile: selectedFile,
+            parsePreview: parsePreview,
             messages: $messages,
             showingChat: $showingChat,
             isDragging: $isDragging
@@ -49,11 +51,13 @@ struct FloatingChatWindow: View {
     @Binding var parsePlan: ParsePlan?
     let account: Account
     let selectedFile: RawFile?
+    let parsePreview: ParsePreview?
     @Binding var messages: [ChatMessage]
     @Binding var showingChat: Bool
     let isDragging: Binding<Bool>
 
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var claudeAPI = ClaudeAPIService.shared
 
     @State private var currentMessage = ""
     @State private var isProcessing = false
@@ -128,7 +132,7 @@ struct FloatingChatWindow: View {
                         }
 
                         // Thinking indicator
-                        if isProcessing && streamingMessage.isEmpty {
+                        if isProcessing {
                             ThinkingIndicator()
                                 .padding()
                         }
@@ -180,13 +184,13 @@ struct FloatingChatWindow: View {
                     .onSubmit {
                         sendMessage()
                     }
-                    .disabled(isProcessing || !ClaudeAPIService.shared.isConfigured)
+                    .disabled(isProcessing || !claudeAPI.isConfigured)
 
                 Button(action: sendMessage) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 24))
                 }
-                .disabled(currentMessage.isEmpty || isProcessing || !ClaudeAPIService.shared.isConfigured)
+                .disabled(currentMessage.isEmpty || isProcessing || !claudeAPI.isConfigured)
                 .buttonStyle(.plain)
             }
             .padding()
@@ -256,11 +260,13 @@ struct FloatingChatWindow: View {
         guard let file = selectedFile else { return }
 
         // Check for API key
-        guard ClaudeAPIService.shared.isConfigured else {
+        guard claudeAPI.isConfigured else {
             messages.append(ChatMessage(
                 role: .system,
-                content: "⚠️ No API key configured. Please add your Anthropic API key to use Claude.\n\nYou can get an API key from: https://console.anthropic.com/settings/keys"
+                content: "⚠️ No API key configured. Please add your Anthropic API key in Settings to use Claude.\n\nYou can get an API key from: https://console.anthropic.com/settings/keys"
             ))
+            isProcessing = false
+            currentMessage = ""
             return
         }
 
@@ -293,7 +299,8 @@ struct FloatingChatWindow: View {
                 conversationHistory: messages.filter { $0.role != .system },
                 file: file,
                 account: account,
-                parsePlan: parsePlan
+                parsePlan: parsePlan,
+                preview: parsePreview
             ) { chunk in
                 fullResponse += chunk
                 streamingMessage = fullResponse

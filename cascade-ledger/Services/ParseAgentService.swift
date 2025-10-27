@@ -140,10 +140,22 @@ class ParseAgentService: ObservableObject {
         let pageRows = Array(filteredRows[startIndex..<endIndex])
 
         let result = pageRows.map { row in
-            [
+            // Convert Date objects to ISO8601 strings for JSON serialization
+            var serializedData: [String: Any] = [:]
+            for (key, value) in row.transformedData {
+                if let date = value as? Date {
+                    serializedData[key] = ISO8601DateFormatter().string(from: date)
+                } else if let decimal = value as? Decimal {
+                    serializedData[key] = NSDecimalNumber(decimal: decimal).doubleValue
+                } else {
+                    serializedData[key] = value
+                }
+            }
+
+            return [
                 "row_number": row.rowNumber,
                 "is_valid": row.isValid,
-                "transformed_data": row.transformedData,
+                "transformed_data": serializedData,
                 "validation_errors": row.validationResults.filter { !$0.passed }.map { $0.message ?? "" }
             ] as [String: Any]
         }
@@ -241,20 +253,83 @@ class ParseAgentService: ObservableObject {
 
         **Canonical Ledger Fields (map here when possible):**
         - `date` (required) - Transaction date
-        - `amount` (required) - Transaction amount in USD
-        - `quantity` - Number of units (100 shares, 0.5 BTC) for buy/sell transactions
-        - `transactionDescription` (required) - Description text
-        - `transactionType` - Type: debit, credit, buy, sell, transfer, dividend, interest, fee, tax
-        - `assetId` - Asset identifier (SPY, VOO, FBTC, BTC, ETH, etc.)
-        - `category` - Transaction category
-        - `subcategory` - Subcategory
+        - `amount` (required) - Transaction amount in USD (Decimal, preserves sign)
+        - `quantity` - Number of units for investments (100 shares, 0.5 BTC, etc.)
+        - `description` or `transactionDescription` (required) - Human-readable description
+        - `assetId` - Asset ticker/symbol (SPY, VOO, FBTC, BTC, ETH, etc.)
 
-        **Metadata Fields (for institution-specific data):**
-        For fields that don't match canonical schema, use metadata mapping:
-        - Format: `metadata.{fieldname}` (e.g., `metadata.lot_id`, `metadata.confirmation_number`)
-        - All metadata preserved as key-value pairs
-        - Useful for: broker references, exchange rates, lot IDs, CUSIP numbers, etc.
-        - Example: Map "Confirmation #" → `metadata.confirmation_number`
+        **DO NOT map to transactionType** - The system infers this automatically from other fields.
+
+        **Metadata Fields (IMPORTANT for Fidelity CSVs):**
+        For institution-specific data that doesn't fit canonical fields, use metadata prefix:
+        - `metadata.action` - Store the raw "Action" field (YOU BOUGHT, YOU SOLD, DIVIDEND, etc.)
+        - `metadata.symbol` - Raw symbol if different from assetId
+        - `metadata.account_type` - Cash, Margin, etc.
+        - `metadata.settlement_date` - Settlement date if different from transaction date
+        - Format: `metadata.{fieldname}` for ANY institution-specific column
+
+        **CRITICAL for Fidelity CSV Format:**
+        - Action field → `metadata.action` (NOT transactionType!)
+        - Symbol → `assetId` (for the primary asset mapping)
+        - Quantity → `quantity` (MUST preserve the actual numeric value!)
+        - Amount ($) → `amount`
+        - Description → `description`
+        - Type (Cash/Margin) → `metadata.account_type`
+
+        **Settlement Row Pattern:**
+        Fidelity CSVs have dual-row structure:
+        - Row 1: Asset transaction (Action=YOU BOUGHT, Symbol=SPY, Quantity=4, Amount=-2019.24)
+        - Row 2: Settlement row (Action=blank, Symbol=blank, Quantity=0, Amount=+2019.24)
+
+        Settlement rows will be filtered out by the double-entry system if:
+        - metadata.action is empty/blank
+        - assetId is empty/blank
+        - quantity = 0
+
+        **Target Output Shape:**
+        ```json
+        {
+          "date": "2024-04-23T00:00:00Z",
+          "amount": -2019.24,
+          "quantity": 4,
+          "description": "SPDR S&P500 ETF TRUST",
+          "assetId": "SPY",
+          "metadata": {
+            "action": "YOU BOUGHT",
+            "symbol": "SPY",
+            "account_type": "Cash",
+            "settlement_date": "2024-04-25"
+          }
+        }
+        ```
+
+        # AVAILABLE TOOLS
+
+        You have access to tools to inspect the CSV data and transformed output:
+
+        1. **get_csv_data** - View raw CSV data with pagination
+           - Use this to see the exact input data structure
+           - Each page shows 100 rows
+           - Helps identify field patterns and data quality issues
+
+        2. **get_transformed_data** - View transformed output after parse plan is applied
+           - Use this to see the RESULTS of your current parse plan
+           - Shows what the data looks like after transformation
+           - Identifies transformation errors and validation failures
+           - **Use this to iterate and debug your parse plan!**
+
+        **Iterative Process:**
+        1. Start with sample data visible in the context above
+        2. Create an initial parse plan
+        3. Use get_transformed_data to see the results
+        4. If output doesn't match the target shape, refine the parse plan
+        5. Repeat until the output is correct
+
+        **Common Issues to Check:**
+        - Is quantity being extracted correctly? (Should be numeric, not 0 for all buys/sells)
+        - Is metadata.action preserved? (Needed for settlement row detection)
+        - Are settlement rows distinguishable? (blank action, blank symbol, qty=0)
+        - Are amounts preserving their signs? (Negative for buys, positive for sells)
 
         # RESPONSE FORMAT
 
@@ -311,8 +386,12 @@ class ParseAgentService: ObservableObject {
         conversationHistory: [ChatMessage],
         file: RawFile,
         account: Account,
-        parsePlan: ParsePlan?
+        parsePlan: ParsePlan?,
+        preview: ParsePreview?
     ) async throws -> String {
+        currentRawFile = file
+        currentPreview = preview
+
         let systemPrompt = buildSystemPrompt(
             file: file,
             account: account,
@@ -334,18 +413,101 @@ class ParseAgentService: ObservableObject {
         // Add new user message
         claudeMessages.append(ClaudeMessage(role: "user", content: userMessage))
 
-        // Call Claude API
-        let response = try await claudeAPI.sendMessage(
-            messages: claudeMessages,
-            system: systemPrompt,
-            maxTokens: 4096,
-            temperature: 0.3
-        )
+        // Tool use conversation loop
+        var finalResponse = ""
+        var iterations = 0
+        let maxIterations = 10 // Prevent infinite loops
 
-        // Update token usage
-        tokenUsage = (response.usage.inputTokens, response.usage.outputTokens)
+        while iterations < maxIterations {
+            iterations += 1
 
-        return response.content.first?.text ?? ""
+            // Call Claude API with tools
+            let response = try await claudeAPI.sendMessage(
+                messages: claudeMessages,
+                system: systemPrompt,
+                maxTokens: 4096,
+                temperature: 0.3,
+                tools: getTools()
+            )
+
+            // Update token usage
+            tokenUsage.0 += response.usage.inputTokens
+            tokenUsage.1 += response.usage.outputTokens
+
+            // Check for tool use
+            let hasToolUse = response.content.contains { $0.type == "tool_use" }
+            let textContent = response.content.filter { $0.type == "text" }.compactMap(\.text).joined()
+
+            if !textContent.isEmpty {
+                finalResponse += textContent
+            }
+
+            if !hasToolUse {
+                // No tool use - we're done
+                break
+            }
+
+            // Handle tool use
+            print("Agent requested \(response.content.filter { $0.type == "tool_use" }.count) tool(s)")
+
+            // Add assistant's response to conversation
+            var assistantContentParts: [[String: Any]] = []
+            for content in response.content {
+                if content.type == "text", let text = content.text {
+                    assistantContentParts.append(["type": "text", "text": text])
+                } else if content.type == "tool_use", let toolId = content.id, let toolName = content.name {
+                    assistantContentParts.append([
+                        "type": "tool_use",
+                        "id": toolId,
+                        "name": toolName,
+                        "input": content.input ?? [:]
+                    ])
+                }
+            }
+
+            claudeMessages.append(ClaudeMessage(
+                role: "assistant",
+                content: convertToJSONString(assistantContentParts)
+            ))
+
+            // Execute tools and create tool result messages
+            var toolResultParts: [[String: Any]] = []
+
+            for content in response.content where content.type == "tool_use" {
+                guard let toolId = content.id,
+                      let toolName = content.name,
+                      let input = content.input else {
+                    continue
+                }
+
+                print("Executing tool: \(toolName)")
+                let result = executeToolCall(toolName, input: input, file: file, preview: preview)
+
+                toolResultParts.append([
+                    "type": "tool_result",
+                    "tool_use_id": toolId,
+                    "content": result
+                ])
+            }
+
+            // Add tool results to conversation
+            if !toolResultParts.isEmpty {
+                claudeMessages.append(ClaudeMessage(
+                    role: "user",
+                    content: convertToJSONString(toolResultParts)
+                ))
+            }
+        }
+
+        return finalResponse
+    }
+
+    private func convertToJSONString(_ object: Any) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let string = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return string
     }
 
     func streamMessage(
@@ -354,8 +516,12 @@ class ParseAgentService: ObservableObject {
         file: RawFile,
         account: Account,
         parsePlan: ParsePlan?,
+        preview: ParsePreview?,
         onChunk: @escaping (String) -> Void
     ) async throws {
+        currentRawFile = file
+        currentPreview = preview
+
         let systemPrompt = buildSystemPrompt(
             file: file,
             account: account,
@@ -371,12 +537,95 @@ class ParseAgentService: ObservableObject {
 
         claudeMessages.append(ClaudeMessage(role: "user", content: userMessage))
 
-        // Stream from Claude
-        try await claudeAPI.streamMessage(
-            messages: claudeMessages,
-            system: systemPrompt,
-            onChunk: onChunk
-        )
+        // Tool use conversation loop
+        var iterations = 0
+        let maxIterations = 10
+
+        while iterations < maxIterations {
+            iterations += 1
+
+            // For now, use non-streaming for tool use handling
+            // TODO: Implement proper streaming with tool use
+            let response = try await claudeAPI.sendMessage(
+                messages: claudeMessages,
+                system: systemPrompt,
+                maxTokens: 4096,
+                temperature: 0.3,
+                tools: getTools()
+            )
+
+            // Update token usage
+            tokenUsage.0 += response.usage.inputTokens
+            tokenUsage.1 += response.usage.outputTokens
+
+            // Stream text content to UI
+            let textContent = response.content.filter { $0.type == "text" }.compactMap(\.text).joined()
+            if !textContent.isEmpty {
+                onChunk(textContent)
+            }
+
+            // Check for tool use
+            let hasToolUse = response.content.contains { $0.type == "tool_use" }
+
+            if !hasToolUse {
+                // No tool use - we're done
+                break
+            }
+
+            // Handle tool use
+            print("Agent requested \(response.content.filter { $0.type == "tool_use" }.count) tool(s)")
+
+            // Add assistant's response to conversation
+            var assistantContentParts: [[String: Any]] = []
+            for content in response.content {
+                if content.type == "text", let text = content.text {
+                    assistantContentParts.append(["type": "text", "text": text])
+                } else if content.type == "tool_use", let toolId = content.id, let toolName = content.name {
+                    assistantContentParts.append([
+                        "type": "tool_use",
+                        "id": toolId,
+                        "name": toolName,
+                        "input": content.input ?? [:]
+                    ])
+                }
+            }
+
+            claudeMessages.append(ClaudeMessage(
+                role: "assistant",
+                content: convertToJSONString(assistantContentParts)
+            ))
+
+            // Execute tools and create tool result messages
+            var toolResultParts: [[String: Any]] = []
+
+            for content in response.content where content.type == "tool_use" {
+                guard let toolId = content.id,
+                      let toolName = content.name,
+                      let input = content.input else {
+                    continue
+                }
+
+                print("Executing tool: \(toolName) with input: \(input)")
+                let result = executeToolCall(toolName, input: input, file: file, preview: preview)
+
+                toolResultParts.append([
+                    "type": "tool_result",
+                    "tool_use_id": toolId,
+                    "content": result
+                ])
+
+                // Show subtle tool execution feedback in UI
+                onChunk(" ") // Keep alive indicator without cluttering output
+            }
+
+            // Add tool results to conversation
+            if !toolResultParts.isEmpty {
+                claudeMessages.append(ClaudeMessage(
+                    role: "user",
+                    content: convertToJSONString(toolResultParts)
+                ))
+            }
+        }
     }
 
     // MARK: - Parse Plan Extraction

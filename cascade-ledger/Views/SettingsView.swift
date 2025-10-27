@@ -22,9 +22,17 @@ struct SettingsView: View {
                         Text("Anthropic API Key")
                             .font(.headline)
 
-                        Text("Your API key is stored securely in macOS Keychain and never leaves your device.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                            Text("API key is stored in UserDefaults (plain text) on this device only. Keep your device secure.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(6)
 
                         HStack {
                             if showingAPIKey {

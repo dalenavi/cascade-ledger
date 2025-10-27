@@ -63,7 +63,7 @@ struct AccountsView: View {
                 }
             } message: {
                 if let account = accountToClear {
-                    Text("This will delete all import batches and \(account.importBatches.reduce(0) { $0 + $1.successfulRows }) transactions for \(account.name). Parse plans will be kept. This cannot be undone.")
+                    Text("This will delete all import batches, \(account.importBatches.reduce(0) { $0 + $1.successfulRows }) single-entry transactions, and all double-entry transactions for \(account.name). Parse plans will be kept. This cannot be undone.")
                 }
             }
         }
@@ -82,16 +82,32 @@ struct AccountsView: View {
     private func clearAllImports(for account: Account) {
         print("Clearing all imports for account: \(account.name)")
         let batchCount = account.importBatches.count
-        let transactionCount = account.importBatches.reduce(0) { $0 + $1.ledgerEntries.count }
+        let ledgerEntryCount = account.importBatches.reduce(0) { $0 + $1.ledgerEntries.count }
 
         // Delete all import batches (cascade deletes ledger entries)
         for batch in account.importBatches {
             modelContext.delete(batch)
         }
 
+        // Also delete all double-entry transactions for this account
+        let accountId = account.id
+        let transactionDescriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { transaction in
+                transaction.account?.id == accountId
+            }
+        )
+
         do {
+            let transactions = try modelContext.fetch(transactionDescriptor)
+            let transactionCount = transactions.count
+
+            // Delete all transactions (cascade deletes journal entries)
+            for transaction in transactions {
+                modelContext.delete(transaction)
+            }
+
             try modelContext.save()
-            print("✓ Cleared \(batchCount) import batches and \(transactionCount) transactions")
+            print("✓ Cleared \(batchCount) import batches, \(ledgerEntryCount) ledger entries, and \(transactionCount) double-entry transactions")
         } catch {
             print("Failed to clear imports: \(error)")
         }

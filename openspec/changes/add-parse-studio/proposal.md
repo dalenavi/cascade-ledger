@@ -49,6 +49,34 @@ The system uses Frictionless Data standards for schemas and JSONata/JOLT for tra
 - Use for testing parse plans and transaction grouping
 
 ## Current State
-- Phase 1-3: Complete and production-ready
-- Phase 4: Advanced features 80% complete
-- Outstanding: Transaction grouping (double-entry), drag-reorder, preference persistence
+- **Phase 1-3:** Complete and production-ready (100%)
+- **Phase 4:** Advanced features complete (100%)
+- **Phase 5:** Double-entry bookkeeping (85% complete)
+- **Outstanding:**
+  - View migration to double-entry models
+  - Data migration service completion
+  - ViewPreferences persistence
+  - Drag-reorder asset lists
+
+## Recent Major Changes
+
+### Double-Entry Bookkeeping System (NEW)
+- Implemented full Transaction/JournalEntry model
+- Fixes USD double-counting bug ($499k → $144k)
+- Enforces accounting rules (debits = credits)
+- TransactionBuilder groups CSV settlement rows
+- ParseEngineV2 creates balanced transactions
+- Test view validates correctness
+
+### Parse Agent Tool Use (COMPLETE)
+- Agent can now call get_csv_data and get_transformed_data
+- Iterative parse plan refinement working
+- Enhanced system prompt with target schema
+- Agent generates correct field mappings
+- Settlement row detection documented in prompts
+
+### API Key Storage (CHANGED)
+- Switched from Keychain to UserDefaults
+- Eliminated persistent password prompts
+- Automatic migration from old storage
+- Security warning in Settings UI

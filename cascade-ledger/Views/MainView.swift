@@ -65,6 +65,14 @@ struct MainView: View {
                     Label("Settings", systemImage: "gearshape")
                         .tag("settings")
                 }
+
+                Section("Testing") {
+                    Label("Double-Entry Test", systemImage: "arrow.left.arrow.right")
+                        .tag("double-entry-test")
+
+                    Label("Parse Plan Debug", systemImage: "ladybug")
+                        .tag("parse-plan-debug")
+                }
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 250)
             .listStyle(.sidebar)
@@ -100,6 +108,10 @@ struct MainView: View {
                 PriceDataView()
             case "settings":
                 SettingsView()
+            case "double-entry-test":
+                DoubleEntryTestView()
+            case "parse-plan-debug":
+                ParsePlanDebugView()
             default:
                 EmptyStateView()
             }
@@ -143,6 +155,8 @@ struct EmptyStateView: View {
             ParsePlan.self,
             ParsePlanVersion.self,
             LedgerEntry.self,
-            ParseRun.self
+            ParseRun.self,
+            Transaction.self,
+            JournalEntry.self
         ])
 }

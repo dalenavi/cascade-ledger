@@ -182,6 +182,7 @@ struct ParseStudioWorkspace: View {
                         parsePlan: $parsePlan,
                         account: account,
                         selectedFile: selectedFile,
+                        parsePreview: parsePreview,
                         messages: $chatMessages,
                         showingChat: $showingAgentChat
                     )
@@ -667,6 +668,10 @@ struct ResultsPanel: View {
 
         Task {
             do {
+                // Save the parse plan version to the import batch
+                batch.parsePlanVersion = version
+                try? modelContext.save()
+
                 let parseEngine = ParseEngine(modelContext: modelContext)
                 let parseRun = try await parseEngine.executeImport(
                     importBatch: batch,

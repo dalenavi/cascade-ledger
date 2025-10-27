@@ -21,6 +21,9 @@ struct cascade_ledgerApp: App {
             ParsePlanVersion.self,
             LedgerEntry.self,
             ParseRun.self,
+            // Double-entry models
+            Transaction.self,
+            JournalEntry.self,
             // Categorization models
             CategorizationAttempt.self,
             CategorizationPrompt.self,

@@ -2,57 +2,61 @@
 //  KeychainService.swift
 //  cascade-ledger
 //
-//  Secure API key storage using macOS Keychain
+//  API key storage using UserDefaults
+//  NOTE: Switched from Keychain due to persistent password prompt issues
 //
 
 import Foundation
-import Security
 
 class KeychainService {
     static let shared = KeychainService()
 
-    private let service = "com.cascade-ledger.api-keys"
-    private let claudeAPIKeyAccount = "anthropic-claude-api-key"
+    private let userDefaults = UserDefaults.standard
+    private let claudeAPIKeyKey = "com.cascade-ledger.claudeAPIKey"
 
-    private init() {}
+    private init() {
+        // Try to migrate from keychain if this is first run
+        migrateFromKeychainIfNeeded()
+    }
 
     // MARK: - API Key Management
 
     func saveClaudeAPIKey(_ key: String) throws {
-        let data = key.data(using: .utf8)!
-
-        // Delete existing key first
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: claudeAPIKeyAccount
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        // Simple approach: Use kSecAttrAccessible without access control
-        // This should allow app access without prompts in sandbox
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: claudeAPIKeyAccount,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
-            kSecAttrSynchronizable as String: false
-        ]
-
-        // Add new key
-        let status = SecItemAdd(query as CFDictionary, nil)
-
-        guard status == errSecSuccess else {
-            throw KeychainError.unableToSave(status: status)
-        }
+        userDefaults.set(key, forKey: claudeAPIKeyKey)
+        userDefaults.synchronize()
+        print("✓ Saved Claude API key to UserDefaults")
     }
 
     func getClaudeAPIKey() throws -> String? {
+        return userDefaults.string(forKey: claudeAPIKeyKey)
+    }
+
+    func deleteClaudeAPIKey() throws {
+        userDefaults.removeObject(forKey: claudeAPIKeyKey)
+        userDefaults.synchronize()
+        print("✓ Deleted Claude API key from UserDefaults")
+    }
+
+    func hasClaudeAPIKey() -> Bool {
+        return userDefaults.string(forKey: claudeAPIKeyKey) != nil
+    }
+
+    // MARK: - Migration
+
+    private func migrateFromKeychainIfNeeded() {
+        // Check if we already have a key in UserDefaults
+        if userDefaults.string(forKey: claudeAPIKeyKey) != nil {
+            return  // Already migrated
+        }
+
+        // Try to read from old keychain location
+        let service = "com.cascade-ledger.api-keys"
+        let account = "anthropic-claude-api-key"
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: claudeAPIKeyAccount,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -60,59 +64,41 @@ class KeychainService {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
-        guard status == errSecSuccess else {
-            if status == errSecItemNotFound {
-                return nil
-            }
-            throw KeychainError.unableToRetrieve(status: status)
+        if status == errSecSuccess,
+           let data = result as? Data,
+           let key = String(data: data, encoding: .utf8) {
+            // Found keychain key - migrate it
+            userDefaults.set(key, forKey: claudeAPIKeyKey)
+            userDefaults.synchronize()
+            print("✓ Migrated API key from Keychain to UserDefaults")
+
+            // Optionally delete from keychain
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account
+            ]
+            SecItemDelete(deleteQuery as CFDictionary)
         }
-
-        guard let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
-        }
-
-        return key
-    }
-
-    func deleteClaudeAPIKey() throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: claudeAPIKeyAccount
-        ]
-
-        let status = SecItemDelete(query as CFDictionary)
-
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unableToDelete(status: status)
-        }
-    }
-
-    func hasClaudeAPIKey() -> Bool {
-        return (try? getClaudeAPIKey()) != nil
     }
 }
 
 enum KeychainError: LocalizedError {
-    case unableToSave(status: OSStatus)
-    case unableToRetrieve(status: OSStatus)
-    case unableToDelete(status: OSStatus)
+    case unableToSave
+    case unableToRetrieve
+    case unableToDelete
     case invalidData
-    case accessControlFailed(error: Error)
 
     var errorDescription: String? {
         switch self {
-        case .unableToSave(let status):
-            return "Failed to save to Keychain (status: \(status))"
-        case .unableToRetrieve(let status):
-            return "Failed to retrieve from Keychain (status: \(status))"
-        case .unableToDelete(let status):
-            return "Failed to delete from Keychain (status: \(status))"
+        case .unableToSave:
+            return "Failed to save API key"
+        case .unableToRetrieve:
+            return "Failed to retrieve API key"
+        case .unableToDelete:
+            return "Failed to delete API key"
         case .invalidData:
-            return "Invalid data in Keychain"
-        case .accessControlFailed(let error):
-            return "Failed to create access control: \(error.localizedDescription)"
+            return "Invalid API key data"
         }
     }
 }
