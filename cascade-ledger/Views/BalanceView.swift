@@ -63,7 +63,7 @@ struct BalanceContent: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query private var allAccounts: [Account]
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
 
     @State private var balanceData: [AccountBalancePoint] = []
     @State private var currentBalance: Decimal = 0
@@ -85,7 +85,7 @@ struct BalanceContent: View {
         self._selectedAssets = selectedAssets
 
         _allAccounts = Query(sort: \Account.name)
-        _allEntries = Query(sort: \LedgerEntry.date)
+        _allEntries = Query(sort: \Transaction.date)
     }
 
     var body: some View {
@@ -291,7 +291,7 @@ struct BalanceContent: View {
     }
 
     private func calculateCumulativeBalance(
-        _ entries: [LedgerEntry],
+        _ entries: [Transaction],
         name: String
     ) -> [AccountBalancePoint] {
         let calendar = Calendar.current
@@ -318,7 +318,7 @@ struct BalanceContent: View {
     }
 
     private func calculateHoldingsForAsset(
-        _ entries: [LedgerEntry],
+        _ entries: [Transaction],
         assetName: String
     ) -> [AccountBalancePoint] {
         guard !entries.isEmpty else { return [] }

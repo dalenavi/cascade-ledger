@@ -44,7 +44,7 @@ struct PositionsContent: View {
     @Binding var selectedAssets: Set<String>
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
 
     @State private var positionData: [PositionPoint] = []
     @State private var positionSummaries: [PositionSummary] = []
@@ -62,10 +62,10 @@ struct PositionsContent: View {
 
         let accountId = account.id
         _allEntries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
-            sort: \LedgerEntry.date
+            sort: \Transaction.date
         )
     }
 
@@ -230,7 +230,7 @@ struct PositionsContent: View {
         positionData = points.sorted { $0.date < $1.date }
     }
 
-    private func calculateQuantityOverTime(_ entries: [LedgerEntry], assetId: String) -> [PositionPoint] {
+    private func calculateQuantityOverTime(_ entries: [Transaction], assetId: String) -> [PositionPoint] {
         let calendar = Calendar.current
         var grouped: [Date: Decimal] = [:]
 

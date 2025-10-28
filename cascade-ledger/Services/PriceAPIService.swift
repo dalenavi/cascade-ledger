@@ -81,8 +81,8 @@ class PriceAPIService {
     func fetchPricesForAllHoldings(account: Account) async throws -> [String: Int] {
         // Get unique assets from account's transactions
         let accountId = account.id
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { entry in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             }
         )

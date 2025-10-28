@@ -34,6 +34,9 @@ final class JournalEntry {
     @Relationship
     var transaction: Transaction?
 
+    @Relationship
+    var asset: Asset?  // Link to Asset master record for asset entries
+
     // Source tracking
     var sourceRowNumber: Int?         // Which CSV row created this entry
     var sourceData: String?           // Raw CSV data for audit

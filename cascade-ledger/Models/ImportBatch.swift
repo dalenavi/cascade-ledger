@@ -33,11 +33,8 @@ final class ImportBatch {
     var failedRows: Int
     var duplicateRows: Int = 0  // Default value for migration
 
-    @Relationship(deleteRule: .cascade, inverse: \LedgerEntry.importBatch)
-    var ledgerEntries: [LedgerEntry]
-
-    @Relationship(deleteRule: .cascade)
-    var parseRuns: [ParseRun]
+    @Relationship(deleteRule: .cascade, inverse: \Transaction.importSession)
+    var transactions: [Transaction]
 
     var createdAt: Date
     var completedAt: Date?
@@ -52,18 +49,9 @@ final class ImportBatch {
         self.successfulRows = 0
         self.failedRows = 0
         self.duplicateRows = 0
-        self.ledgerEntries = []
-        self.parseRuns = []
+        self.transactions = []
         self.createdAt = Date()
     }
-}
-
-enum ImportStatus: String, Codable, CaseIterable {
-    case pending = "pending"
-    case inProgress = "in_progress"
-    case partialSuccess = "partial_success"
-    case success = "success"
-    case failed = "failed"
 }
 
 @Model

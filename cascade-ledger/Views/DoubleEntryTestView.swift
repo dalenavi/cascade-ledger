@@ -464,8 +464,10 @@ extension Array where Element == Account {
             Transaction.self,
             JournalEntry.self,
             Account.self,
-            ImportBatch.self,
+            ImportSession.self,
             ParsePlan.self,
-            ParsePlanVersion.self
+            ParsePlanVersion.self,
+            Asset.self,
+            Position.self
         ])
 }

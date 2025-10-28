@@ -77,7 +77,7 @@ struct ImportHistoryView: View {
                 print("Re-importing \(rawFile.fileName) with parse plan v\(version.versionNumber)")
 
                 // Delete old ledger entries from this batch
-                for entry in batch.ledgerEntries {
+                for entry in batch.transactions {
                     modelContext.delete(entry)
                 }
 
@@ -111,7 +111,7 @@ struct ImportBatchRow: View {
     let onReimport: () -> Void
 
     private var quantityCount: Int {
-        batch.ledgerEntries.filter { $0.hasQuantityData }.count
+        batch.transactions.filter { $0.hasQuantityData }.count
     }
 
     private var hasQuantityData: Bool {
@@ -210,10 +210,12 @@ struct StatusBadge: View {
             return .orange
         case .failed:
             return .red
-        case .inProgress:
+        case .inProgress, .processing:
             return .blue
         case .pending:
             return .gray
+        case .rolledBack:
+            return .purple
         }
     }
 }

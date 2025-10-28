@@ -82,7 +82,7 @@ struct AccountsView: View {
     private func clearAllImports(for account: Account) {
         print("Clearing all imports for account: \(account.name)")
         let batchCount = account.importBatches.count
-        let ledgerEntryCount = account.importBatches.reduce(0) { $0 + $1.ledgerEntries.count }
+        let ledgerEntryCount = account.importBatches.reduce(0) { $0 + $1.transactions.count }
 
         // Delete all import batches (cascade deletes ledger entries)
         for batch in account.importBatches {

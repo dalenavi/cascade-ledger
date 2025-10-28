@@ -239,7 +239,7 @@ struct CategorizationCorrectionSheet: View {
         self.account = account
 
         // Initialize with proposed values
-        _selectedType = State(initialValue: attempt.proposedType ?? attempt.transaction?.transactionType ?? .credit)
+        _selectedType = State(initialValue: attempt.proposedType ?? attempt.transaction?.transactionType ?? .other)
         _selectedCategory = State(initialValue: attempt.proposedCategory ?? "")
         _selectedTags = State(initialValue: attempt.proposedTags)
     }

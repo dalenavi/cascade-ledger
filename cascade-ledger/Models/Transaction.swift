@@ -24,6 +24,11 @@ final class Transaction {
     var settlementDate: Date?
     var notes: String?
 
+    // User categorization overrides
+    var userTransactionType: TransactionType?
+    var userCategory: String?
+    var tags: [String]
+
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \JournalEntry.transaction)
     var journalEntries: [JournalEntry]
@@ -32,7 +37,10 @@ final class Transaction {
     var account: Account?              // The brokerage/bank account
 
     @Relationship
-    var importBatch: ImportBatch?
+    var importSession: ImportSession?
+
+    @Relationship(deleteRule: .nullify, inverse: \CategorizationAttempt.transaction)
+    var categorizationAttempts: [CategorizationAttempt]
 
     // Source tracking
     var sourceRowNumbers: [Int]       // CSV rows that created this transaction
@@ -69,10 +77,74 @@ final class Transaction {
     }
 
     /// Get the primary asset involved (if any)
-    var primaryAsset: String? {
+    var primaryAsset: Asset? {
         journalEntries
             .first(where: { $0.accountType == .asset })?
-            .accountName
+            .asset
+    }
+
+    /// Compatibility: Amount field for UI
+    var amount: Decimal {
+        abs(netCashImpact)
+    }
+
+    /// Compatibility: Effective category considering user overrides
+    var effectiveCategory: String {
+        userCategory ?? transactionType.rawValue
+    }
+
+    /// Compatibility: Check if has tentative categorization
+    var hasTentativeCategorization: Bool {
+        false  // Stub for now
+    }
+
+    /// Compatibility: Check if has quantity data
+    var hasQuantityData: Bool {
+        journalEntries.contains { $0.quantity != nil }
+    }
+
+    /// Compatibility: Effective transaction type considering user overrides
+    var effectiveTransactionType: TransactionType {
+        userTransactionType ?? transactionType
+    }
+
+    /// Compatibility: Asset ID for old views
+    var assetId: String? {
+        primaryAsset?.symbol
+    }
+
+    /// Compatibility: Quantity for old views
+    var quantity: Decimal? {
+        guard let asset = primaryAsset else { return nil }
+        let quantities = journalEntries
+            .filter { $0.asset?.id == asset.id }
+            .compactMap { $0.quantity }
+        return quantities.isEmpty ? nil : quantities.reduce(0, +)
+    }
+
+    /// Compatibility: Quantity unit for old views
+    var quantityUnit: String? {
+        journalEntries.first(where: { $0.quantityUnit != nil })?.quantityUnit
+    }
+
+    /// Compatibility: Category field
+    var category: String? {
+        userCategory
+    }
+
+    /// Compatibility: Raw transaction type from CSV
+    var rawTransactionType: String? {
+        nil  // Stub for now
+    }
+
+    /// Compatibility: Subcategory field
+    var subcategory: String? {
+        nil  // Stub for now
+    }
+
+    /// Compatibility: Metadata dictionary
+    var metadata: [String: String] {
+        [:]  // Stub for now
     }
 
     /// Get total quantity change for an asset
@@ -104,6 +176,8 @@ final class Transaction {
         self.account = account
         self.journalEntries = []
         self.sourceRowNumbers = []
+        self.tags = []
+        self.categorizationAttempts = []
         self.createdAt = Date()
         self.updatedAt = Date()
     }
@@ -165,6 +239,19 @@ final class Transaction {
             throw TransactionError.insufficientJournalEntries
         }
     }
+}
+
+enum TransactionType: String, Codable, CaseIterable {
+    case buy = "buy"
+    case sell = "sell"
+    case transfer = "transfer"
+    case dividend = "dividend"
+    case interest = "interest"
+    case fee = "fee"
+    case tax = "tax"
+    case deposit = "deposit"
+    case withdrawal = "withdrawal"
+    case other = "other"
 }
 
 enum TransactionError: LocalizedError {

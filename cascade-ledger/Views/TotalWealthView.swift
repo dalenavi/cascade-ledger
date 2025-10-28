@@ -41,7 +41,7 @@ struct TotalWealthContent: View {
     @Binding var selectedAssets: Set<String>
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
     @Query private var allPrices: [AssetPrice]
 
     @State private var wealthData: [StackedWealthPoint] = []
@@ -60,10 +60,10 @@ struct TotalWealthContent: View {
 
         let accountId = account.id
         _allEntries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
-            sort: \LedgerEntry.date
+            sort: \Transaction.date
         )
 
         _allPrices = Query(sort: \AssetPrice.date)

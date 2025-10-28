@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 struct TransactionDetailView: View {
-    let entry: LedgerEntry
+    let entry: Transaction
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -37,7 +37,7 @@ struct TransactionDetailView: View {
         "Other"
     ]
 
-    init(entry: LedgerEntry) {
+    init(entry: Transaction) {
         self.entry = entry
         _notes = State(initialValue: entry.notes ?? "")
         _userCategory = State(initialValue: entry.userCategory ?? entry.category ?? "")
@@ -197,9 +197,9 @@ struct TransactionDetailView: View {
 
     private var transactionTypeColor: Color {
         switch entry.transactionType {
-        case .credit, .deposit, .dividend, .interest, .sell:
+        case .other, .deposit, .dividend, .interest, .sell:
             return .green
-        case .debit, .withdrawal, .fee, .tax, .buy:
+        case .other, .withdrawal, .fee, .tax, .buy:
             return .red
         case .transfer:
             return .blue

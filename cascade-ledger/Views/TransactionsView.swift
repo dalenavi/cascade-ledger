@@ -14,7 +14,7 @@ struct TransactionsView: View {
 
     @State private var searchText = ""
     @State private var selectedTransactions: Set<UUID> = []
-    @State private var showingDetail: LedgerEntry?
+    @State private var showingDetail: Transaction?
     @State private var showingCategorizationAgent = false
     @State private var categorizationMessages: [ChatMessage] = []
     @State private var isCategorizing = false
@@ -219,8 +219,8 @@ struct TransactionsView: View {
         }
     }
 
-    private func getSelectedTransactionEntities(account: Account) async throws -> [LedgerEntry] {
-        let descriptor = FetchDescriptor<LedgerEntry>()
+    private func getSelectedTransactionEntities(account: Account) async throws -> [Transaction] {
+        let descriptor = FetchDescriptor<Transaction>()
         let allEntries = try modelContext.fetch(descriptor)
 
         return allEntries.filter { selectedTransactions.contains($0.id) }
@@ -234,9 +234,9 @@ struct TransactionsList: View {
     let filterBy: GroupByDimension
     let visibleGroups: Set<String>
     let showUncategorized: Bool
-    let onShowDetail: (LedgerEntry) -> Void
+    let onShowDetail: (Transaction) -> Void
 
-    @Query private var entries: [LedgerEntry]
+    @Query private var entries: [Transaction]
 
     init(
         account: Account,
@@ -245,7 +245,7 @@ struct TransactionsList: View {
         filterBy: GroupByDimension,
         visibleGroups: Set<String>,
         showUncategorized: Bool,
-        onShowDetail: @escaping (LedgerEntry) -> Void
+        onShowDetail: @escaping (Transaction) -> Void
     ) {
         self.account = account
         self.searchText = searchText
@@ -258,15 +258,15 @@ struct TransactionsList: View {
         let accountId = account.id
         // Configure query based on account
         _entries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
-            sort: \LedgerEntry.date,
+            sort: \Transaction.date,
             order: .reverse
         )
     }
 
-    private var filteredEntries: [LedgerEntry] {
+    private var filteredEntries: [Transaction] {
         entries.filter { entry in
             // Uncategorized filter
             if entry.effectiveCategory == "Uncategorized" && !showUncategorized {
@@ -309,7 +309,7 @@ struct TransactionsList: View {
         }
     }
 
-    private func toggleSelection(_ entry: LedgerEntry) {
+    private func toggleSelection(_ entry: Transaction) {
         if selectedTransactions.contains(entry.id) {
             selectedTransactions.remove(entry.id)
         } else {
@@ -325,7 +325,7 @@ struct TransactionFilterPanel: View {
     let account: Account
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
 
     init(
         filterBy: Binding<GroupByDimension>,
@@ -340,7 +340,7 @@ struct TransactionFilterPanel: View {
 
         let accountId = account.id
         _allEntries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             }
         )
@@ -493,7 +493,7 @@ struct FlowLayout: Layout {
 }
 
 struct TransactionRowWithCategorization: View {
-    let entry: LedgerEntry
+    let entry: Transaction
     let isSelected: Bool
     let onToggleSelection: () -> Void
     let onShowDetail: () -> Void
@@ -595,9 +595,9 @@ struct TransactionRowWithCategorization: View {
 
     private var amountColor: Color {
         switch entry.effectiveTransactionType {
-        case .credit, .deposit, .dividend, .interest, .sell:
+        case .other, .deposit, .dividend, .interest, .sell:
             return .green
-        case .debit, .withdrawal, .fee, .tax, .buy:
+        case .other, .withdrawal, .fee, .tax, .buy:
             return .red
         case .transfer:
             return .blue
@@ -606,7 +606,7 @@ struct TransactionRowWithCategorization: View {
 }
 
 struct TransactionRow: View {
-    let entry: LedgerEntry
+    let entry: Transaction
 
     var body: some View {
         HStack {
@@ -648,9 +648,9 @@ struct TransactionRow: View {
 
     private var amountColor: Color {
         switch entry.effectiveTransactionType {
-        case .credit, .deposit, .dividend, .interest, .sell:
+        case .other, .deposit, .dividend, .interest, .sell:
             return .green
-        case .debit, .withdrawal, .fee, .tax, .buy:
+        case .other, .withdrawal, .fee, .tax, .buy:
             return .red
         case .transfer:
             return .blue

@@ -150,12 +150,12 @@ struct EmptyStateView: View {
         .modelContainer(for: [
             Account.self,
             Institution.self,
-            ImportBatch.self,
+            ImportSession.self,
             RawFile.self,
             ParsePlan.self,
             ParsePlanVersion.self,
-            LedgerEntry.self,
-            ParseRun.self,
+            Asset.self,
+            Position.self,
             Transaction.self,
             JournalEntry.self
         ])

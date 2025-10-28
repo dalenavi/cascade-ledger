@@ -91,7 +91,7 @@ class CategorizationService: ObservableObject {
     // MARK: - Categorization
 
     func categorizeTransactions(
-        _ transactions: [LedgerEntry],
+        _ transactions: [Transaction],
         account: Account
     ) async throws -> [CategorizationAttempt] {
         isProcessing = true
@@ -221,7 +221,7 @@ class CategorizationService: ObservableObject {
         return prompt
     }
 
-    private func buildBatchCategorizationRequest(_ transactions: [LedgerEntry]) -> String {
+    private func buildBatchCategorizationRequest(_ transactions: [Transaction]) -> String {
         var request = """
         Categorize these \(transactions.count) transactions in chronological order.
 
@@ -245,14 +245,10 @@ class CategorizationService: ObservableObject {
 
 
             [\(index)] Date: \(transaction.date.formatted(date: .abbreviated, time: .omitted))
-                Amount: \(transaction.amount)
+                Cash Impact: \(transaction.netCashImpact)
                 Description: \(transaction.transactionDescription)
                 Type: \(transaction.transactionType.rawValue)
             """
-
-            if let rawType = transaction.rawTransactionType {
-                request += "\n    CSV Type: \(rawType)"
-            }
         }
 
         return request
@@ -260,7 +256,7 @@ class CategorizationService: ObservableObject {
 
     private func parseBatchCategorizationResponse(
         _ response: String,
-        transactions: [LedgerEntry]
+        transactions: [Transaction]
     ) -> [CategorizationAttempt] {
         // Extract JSON array from response
         guard let jsonStart = response.range(of: "["),

@@ -53,7 +53,7 @@ struct AnalyticsContent: View {
     @Binding var visibleGroups: Set<String>
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
 
     @State private var timeSeriesData: [TimeSeriesDataPoint] = []
     @State private var groupSummaries: [GroupSummary] = []
@@ -75,10 +75,10 @@ struct AnalyticsContent: View {
 
         let accountId = account.id
         _allEntries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
-            sort: \LedgerEntry.date
+            sort: \Transaction.date
         )
     }
 
@@ -179,7 +179,7 @@ struct AnalyticsContent: View {
         )
     }
 
-    private func aggregateByDimension(_ entries: [LedgerEntry], dimension: GroupByDimension) -> [GroupSummary] {
+    private func aggregateByDimension(_ entries: [Transaction], dimension: GroupByDimension) -> [GroupSummary] {
         var summaries: [String: GroupSummary] = [:]
 
         for entry in entries {
@@ -203,7 +203,7 @@ struct AnalyticsContent: View {
     }
 
     private func createTimeSeries(
-        _ entries: [LedgerEntry],
+        _ entries: [Transaction],
         granularity: TimeGranularity,
         groupBy: GroupByDimension,
         chartMode: ChartMode
@@ -461,7 +461,7 @@ struct GroupSummary {
     let displayName: String
     var total: Decimal
     var count: Int
-    var entries: [LedgerEntry]
+    var entries: [Transaction]
 
     // For asset analysis
     var buys: Decimal {
@@ -483,14 +483,14 @@ struct TypeSummary {
     let type: TransactionType
     var total: Decimal
     var count: Int
-    var entries: [LedgerEntry]
+    var entries: [Transaction]
 }
 
 struct CategorySummary {
     let category: String
     var total: Decimal
     var count: Int
-    var entries: [LedgerEntry]
+    var entries: [Transaction]
 }
 
 enum GroupByDimension: String, CaseIterable {
@@ -508,7 +508,7 @@ enum GroupByDimension: String, CaseIterable {
         }
     }
 
-    func groupKey(for entry: LedgerEntry) -> String {
+    func groupKey(for entry: Transaction) -> String {
         switch self {
         case .category:
             return entry.effectiveCategory

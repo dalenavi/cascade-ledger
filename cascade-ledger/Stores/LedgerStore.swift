@@ -20,7 +20,7 @@ class LedgerStore: ObservableObject {
     // MARK: - Append-Only Operations
 
     // Add ledger entry (append-only)
-    func appendLedgerEntry(_ entry: LedgerEntry) throws {
+    func appendTransaction(_ entry: Transaction) throws {
         // Check for duplicates
         if let duplicate = try findDuplicate(entry) {
             entry.isDuplicate = true
@@ -32,7 +32,7 @@ class LedgerStore: ObservableObject {
     }
 
     // Batch append ledger entries
-    func appendLedgerEntries(_ entries: [LedgerEntry]) async throws {
+    func appendLedgerEntries(_ entries: [Transaction]) async throws {
         for entry in entries {
             if let duplicate = try findDuplicate(entry) {
                 entry.isDuplicate = true
@@ -46,10 +46,10 @@ class LedgerStore: ObservableObject {
     // MARK: - Query Operations
 
     // Get ledger entries for account
-    func getLedgerEntriesForAccount(_ account: Account, limit: Int? = nil) async throws -> [LedgerEntry] {
+    func getLedgerEntriesForAccount(_ account: Account, limit: Int? = nil) async throws -> [Transaction] {
         let accountId = account.id
-        var descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { entry in
+        var descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
             sortBy: [SortDescriptor(\.date, order: .reverse)]
@@ -63,10 +63,10 @@ class LedgerStore: ObservableObject {
     }
 
     // Get ledger entries by date range
-    func getLedgerEntriesByDateRange(account: Account, from startDate: Date, to endDate: Date) async throws -> [LedgerEntry] {
+    func getLedgerEntriesByDateRange(account: Account, from startDate: Date, to endDate: Date) async throws -> [Transaction] {
         let accountId = account.id
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { entry in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId &&
                 entry.date >= startDate &&
                 entry.date <= endDate
@@ -77,10 +77,10 @@ class LedgerStore: ObservableObject {
     }
 
     // Get ledger entries for import batch
-    func getLedgerEntriesForImport(_ importBatch: ImportBatch) async throws -> [LedgerEntry] {
+    func getLedgerEntriesForImport(_ importBatch: ImportBatch) async throws -> [Transaction] {
         let importBatchId = importBatch.id
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { entry in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { entry in
                 entry.importBatch?.id == importBatchId
             },
             sortBy: [SortDescriptor(\.date)]
@@ -91,11 +91,11 @@ class LedgerStore: ObservableObject {
     // MARK: - Duplicate Detection
 
     // Find duplicate by transaction hash
-    func findDuplicate(_ entry: LedgerEntry) throws -> LedgerEntry? {
+    func findDuplicate(_ entry: Transaction) throws -> Transaction? {
         let transactionHash = entry.transactionHash
         let entryId = entry.id
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { ledger in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { ledger in
                 ledger.transactionHash == transactionHash &&
                 ledger.id != entryId &&
                 !ledger.isDuplicate
@@ -106,7 +106,7 @@ class LedgerStore: ObservableObject {
     }
 
     // Find potential duplicates using fuzzy matching
-    func findPotentialDuplicates(_ entry: LedgerEntry, tolerance: TimeInterval = 86400) async throws -> [LedgerEntry] {
+    func findPotentialDuplicates(_ entry: Transaction, tolerance: TimeInterval = 86400) async throws -> [Transaction] {
         guard let account = entry.account else { return [] }
 
         let accountId = account.id
@@ -114,8 +114,8 @@ class LedgerStore: ObservableObject {
         let startDate = entry.date.addingTimeInterval(-tolerance)
         let endDate = entry.date.addingTimeInterval(tolerance)
 
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { ledger in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { ledger in
                 ledger.account?.id == accountId &&
                 ledger.id != entryId &&
                 ledger.date >= startDate &&
@@ -158,8 +158,8 @@ class LedgerStore: ObservableObject {
     // Get transaction count
     func getTransactionCount(_ account: Account) async throws -> Int {
         let accountId = account.id
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { entry in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId && !entry.isDuplicate
             }
         )
@@ -170,14 +170,14 @@ class LedgerStore: ObservableObject {
     // MARK: - Reconciliation
 
     // Mark entry as reconciled
-    func markAsReconciled(_ entry: LedgerEntry) throws {
+    func markAsReconciled(_ entry: Transaction) throws {
         entry.isReconciled = true
         entry.updatedAt = Date()
         try modelContext.save()
     }
 
     // Batch reconcile entries
-    func batchReconcile(_ entries: [LedgerEntry]) throws {
+    func batchReconcile(_ entries: [Transaction]) throws {
         for entry in entries {
             entry.isReconciled = true
             entry.updatedAt = Date()
@@ -188,7 +188,7 @@ class LedgerStore: ObservableObject {
     // MARK: - Export
 
     // Export ledger entries to CSV
-    func exportToCSV(_ entries: [LedgerEntry]) -> String {
+    func exportToCSV(_ entries: [Transaction]) -> String {
         var csv = "Date,Amount,Description,Type,Category,Account,Reconciled\n"
 
         let dateFormatter = DateFormatter()

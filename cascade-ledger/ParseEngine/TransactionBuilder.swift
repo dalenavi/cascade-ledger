@@ -88,7 +88,7 @@ class TransactionBuilder {
     static func createTransaction(
         from rowGroup: [[String: Any]],
         account: Account,
-        importBatch: ImportBatch?
+        importSession: ImportSession?
     ) throws -> Transaction {
         guard let primaryRow = rowGroup.first(where: { row in
             // Check for transaction type in various fields
@@ -134,7 +134,7 @@ class TransactionBuilder {
             account: account
         )
 
-        transaction.importBatch = importBatch
+        transaction.importSession = importSession
         transaction.sourceRowNumbers = rowGroup.compactMap { $0["rowNumber"] as? Int }
 
         // Build journal entries based on transaction pattern
@@ -522,7 +522,7 @@ class TransactionBuilder {
         case "WITHDRAWAL":
             return .withdrawal
         default:
-            return .credit
+            return .other
         }
     }
 

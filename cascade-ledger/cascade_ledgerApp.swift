@@ -15,12 +15,13 @@ struct cascade_ledgerApp: App {
             // Core models
             Account.self,
             Institution.self,
-            ImportBatch.self,
-            RawFile.self,
             ParsePlan.self,
             ParsePlanVersion.self,
-            LedgerEntry.self,
-            ParseRun.self,
+            RawFile.self,
+            // New domain models
+            Asset.self,
+            Position.self,
+            ImportSession.self,
             // Double-entry models
             Transaction.self,
             JournalEntry.self,
@@ -30,9 +31,7 @@ struct cascade_ledgerApp: App {
             // Price data
             AssetPrice.self,
             // View preferences
-            ViewPreferences.self,
-            // Keep Item for now (can remove later)
-            Item.self
+            ViewPreferences.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

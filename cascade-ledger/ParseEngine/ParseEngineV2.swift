@@ -264,7 +264,7 @@ class ParseEngineV2: ObservableObject {
 
     // MARK: - Migration Support
 
-    /// Migrate existing LedgerEntry data to Transaction/JournalEntry model
+    /// Migrate existing Transaction data to Transaction/JournalEntry model
     func migrateExistingData() async throws -> (migrated: Int, failed: Int) {
         currentStatus = "Migrating existing data..."
         isProcessing = true
@@ -274,7 +274,7 @@ class ParseEngineV2: ObservableObject {
         }
 
         // Fetch all existing ledger entries
-        let descriptor = FetchDescriptor<LedgerEntry>(
+        let descriptor = FetchDescriptor<Transaction>(
             sortBy: [SortDescriptor(\.date), SortDescriptor(\.sourceRowNumber)]
         )
         let ledgerEntries = try modelContext.fetch(descriptor)
@@ -283,7 +283,7 @@ class ParseEngineV2: ObservableObject {
         print("Found \(ledgerEntries.count) ledger entries to migrate")
 
         // Group by import batch and approximate transaction
-        var entriesByBatch: [UUID: [LedgerEntry]] = [:]
+        var entriesByBatch: [UUID: [Transaction]] = [:]
         for entry in ledgerEntries {
             let batchId = entry.importBatch?.id ?? UUID()
             entriesByBatch[batchId, default: []].append(entry)
@@ -325,9 +325,9 @@ class ParseEngineV2: ObservableObject {
     }
 
     /// Group ledger entries that likely belong to the same transaction
-    private func groupLedgerEntriesIntoTransactions(_ entries: [LedgerEntry]) -> [[LedgerEntry]] {
-        var groups: [[LedgerEntry]] = []
-        var currentGroup: [LedgerEntry] = []
+    private func groupLedgerEntriesIntoTransactions(_ entries: [Transaction]) -> [[Transaction]] {
+        var groups: [[Transaction]] = []
+        var currentGroup: [Transaction] = []
         var lastDate: Date?
 
         for entry in entries.sorted(by: { $0.date < $1.date || ($0.date == $1.date && ($0.sourceRowNumber ?? 0) < ($1.sourceRowNumber ?? 0)) }) {
@@ -351,7 +351,7 @@ class ParseEngineV2: ObservableObject {
     }
 
     /// Create a transaction from grouped ledger entries
-    private func createTransactionFromLedgerEntries(_ entries: [LedgerEntry]) throws -> Transaction {
+    private func createTransactionFromLedgerEntries(_ entries: [Transaction]) throws -> Transaction {
         guard let first = entries.first,
               let account = first.account else {
             throw ParseEngineV2Error.invalidData

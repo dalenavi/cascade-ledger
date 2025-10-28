@@ -120,7 +120,7 @@ class ParseEngine: ObservableObject {
         var duplicateCount = 0
 
         // Check existing ledger entry count before import
-        let allEntriesDescriptor = FetchDescriptor<LedgerEntry>()
+        let allEntriesDescriptor = FetchDescriptor<Transaction>()
         let existingEntryCount = (try? modelContext.fetch(allEntriesDescriptor).count) ?? 0
 
         print("=== Full Import Starting ===")
@@ -159,7 +159,7 @@ class ParseEngine: ObservableObject {
 
                     if isValid {
                         // Create ledger entry
-                        let ledgerEntry = try createLedgerEntry(
+                        let ledgerEntry = try createTransaction(
                             from: transformed,
                             account: importBatch.account!,
                             importBatch: importBatch,
@@ -259,11 +259,11 @@ class ParseEngine: ObservableObject {
     // MARK: - Helper Methods
 
     // Check if transaction already exists (excluding current import batch)
-    private func checkForDuplicate(_ entry: LedgerEntry, currentBatchId: UUID) throws -> Bool {
+    private func checkForDuplicate(_ entry: Transaction, currentBatchId: UUID) throws -> Bool {
         let hash = entry.transactionHash
         let batchId = currentBatchId
-        let descriptor = FetchDescriptor<LedgerEntry>(
-            predicate: #Predicate<LedgerEntry> { existing in
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate<Transaction> { existing in
                 existing.transactionHash == hash &&
                 existing.importBatch?.id != batchId  // Exclude current batch
             }
@@ -330,13 +330,13 @@ class ParseEngine: ObservableObject {
     }
 
     // Create ledger entry from transformed data
-    private func createLedgerEntry(
+    private func createTransaction(
         from data: [String: Any],
         account: Account,
         importBatch: ImportBatch,
         parseRun: ParseRun,
         rowNumber: Int
-    ) throws -> LedgerEntry {
+    ) throws -> Transaction {
         // Extract required fields
         guard let date = data["date"] as? Date else {
             throw ParseEngineError.missingRequiredField("date")
@@ -362,7 +362,7 @@ class ParseEngine: ObservableObject {
             ?? data["action"] as? String
 
         // Create ledger entry
-        let ledgerEntry = LedgerEntry(
+        let ledgerEntry = Transaction(
             date: date,
             amount: amount,
             description: description,
@@ -479,6 +479,17 @@ struct ParsePreview {
     let errors: [ParseError]
     let headers: [String]
     let successRate: Double
+}
+
+struct ParseError {
+    let rowNumber: Int
+    let message: String
+}
+
+struct ValidationResult {
+    let ruleName: String
+    let passed: Bool
+    let message: String?
 }
 
 struct TransformedRow: Identifiable {

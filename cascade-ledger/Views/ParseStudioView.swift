@@ -1012,9 +1012,9 @@ extension ModelContainer {
     static var preview: ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(
-            for: Account.self, Institution.self, ImportBatch.self,
+            for: Account.self, Institution.self, ImportSession.self,
             RawFile.self, ParsePlan.self, ParsePlanVersion.self,
-            LedgerEntry.self, ParseRun.self,
+            Asset.self, Position.self, Transaction.self, JournalEntry.self,
             configurations: config
         )
         return container

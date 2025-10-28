@@ -16,7 +16,7 @@ struct TransactionTimelineView: View {
     @State private var visibleGroups: Set<String> = []
     @State private var showUncategorized = true
     @State private var searchText = ""
-    @State private var showingDetail: LedgerEntry?
+    @State private var showingDetail: Transaction?
 
     var body: some View {
         NavigationStack {
@@ -53,10 +53,10 @@ struct TimelineContent: View {
     @Binding var visibleGroups: Set<String>
     @Binding var showUncategorized: Bool
     @Binding var searchText: String
-    @Binding var showingDetail: LedgerEntry?
+    @Binding var showingDetail: Transaction?
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allEntries: [LedgerEntry]
+    @Query private var allEntries: [Transaction]
 
     @State private var groupSummaries: [GroupSummary] = []
 
@@ -67,7 +67,7 @@ struct TimelineContent: View {
         visibleGroups: Binding<Set<String>>,
         showUncategorized: Binding<Bool>,
         searchText: Binding<String>,
-        showingDetail: Binding<LedgerEntry?>
+        showingDetail: Binding<Transaction?>
     ) {
         self.account = account
         self._timeRange = timeRange
@@ -79,15 +79,15 @@ struct TimelineContent: View {
 
         let accountId = account.id
         _allEntries = Query(
-            filter: #Predicate<LedgerEntry> { entry in
+            filter: #Predicate<Transaction> { entry in
                 entry.account?.id == accountId
             },
-            sort: \LedgerEntry.date,
+            sort: \Transaction.date,
             order: .reverse
         )
     }
 
-    private var filteredEntries: [LedgerEntry] {
+    private var filteredEntries: [Transaction] {
         let dateRange = timeRange.dateRange
 
         return allEntries.filter { entry in

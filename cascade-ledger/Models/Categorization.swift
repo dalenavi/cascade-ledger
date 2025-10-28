@@ -14,7 +14,7 @@ final class CategorizationAttempt {
     var timestamp: Date
 
     @Relationship
-    var transaction: LedgerEntry?
+    var transaction: Transaction?
 
     // AI Proposal
     var proposedType: TransactionType?
@@ -33,7 +33,7 @@ final class CategorizationAttempt {
     var userFeedback: String? // User's explanation of correction
 
     init(
-        transaction: LedgerEntry,
+        transaction: Transaction,
         proposedType: TransactionType? = nil,
         proposedCategory: String? = nil,
         proposedTags: [String] = [],
