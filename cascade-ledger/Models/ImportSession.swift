@@ -40,7 +40,20 @@ final class ImportSession {
     var transactions: [Transaction]
 
     // Errors and warnings
-    var errors: [String]  // JSON encoded error details
+    var errorsData: Data?  // JSON-encoded array of error strings
+
+    var errors: [String] {
+        get {
+            guard let data = errorsData,
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            errorsData = try? JSONEncoder().encode(newValue)
+        }
+    }
 
     init(
         fileName: String,

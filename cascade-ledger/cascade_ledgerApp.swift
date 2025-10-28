@@ -28,6 +28,11 @@ struct cascade_ledgerApp: App {
             // Categorization models
             CategorizationAttempt.self,
             CategorizationPrompt.self,
+            CategorizationSession.self,
+            CategorizationBatch.self,
+            // Legacy models
+            ImportBatch.self,
+            ParseRun.self,
             // Price data
             AssetPrice.self,
             // View preferences

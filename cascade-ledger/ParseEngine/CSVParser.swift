@@ -47,7 +47,7 @@ class CSVParser {
                     .filter { !$0.isEmpty }
                 expectedColumnCount = headers.count
                 isFirstDataRow = false
-                print("Parsed headers (\(headers.count)): \(headers.joined(separator: ", "))")
+                // Squelched noisy log: print("Parsed headers...")
             } else {
                 isFirstDataRow = false
 
@@ -64,7 +64,7 @@ class CSVParser {
             }
         }
 
-        print("CSV Parse complete: \(headers.count) headers, \(rows.count) data rows from \(lines.count) total lines")
+        // Squelched noisy log: print("CSV Parse complete...")
 
         return CSVData(headers: headers, rows: rows, dialect: dialect)
     }

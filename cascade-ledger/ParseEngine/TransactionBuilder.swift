@@ -9,11 +9,13 @@ import Foundation
 import SwiftData
 
 /// Builds proper double-entry transactions from grouped CSV rows
+@MainActor
 class TransactionBuilder {
 
-    // MARK: - Row Grouping
+    // MARK: - Row Grouping (DEPRECATED - Use SettlementDetector instead)
 
     /// Group related CSV rows into transaction groups
+    /// @deprecated Use SettlementDetectorFactory.create(for:).groupRows() instead
     /// Fidelity pattern: Asset row followed by settlement row(s)
     static func groupRows(_ rows: [[String: Any]]) -> [[[String: Any]]] {
         var groups: [[[String: Any]]] = []
@@ -88,7 +90,8 @@ class TransactionBuilder {
     static func createTransaction(
         from rowGroup: [[String: Any]],
         account: Account,
-        importSession: ImportSession?
+        importSession: ImportSession?,
+        assetRegistry: AssetRegistry = AssetRegistry.shared
     ) throws -> Transaction {
         guard let primaryRow = rowGroup.first(where: { row in
             // Check for transaction type in various fields
@@ -147,7 +150,8 @@ class TransactionBuilder {
                     ?? row["metadata.action"] as? String
                     ?? ""
                 return type.isEmpty
-            }
+            },
+            assetRegistry: assetRegistry
         )
 
         // Validate the transaction
@@ -161,7 +165,8 @@ class TransactionBuilder {
     private static func buildJournalEntries(
         for transaction: Transaction,
         primaryRow: [String: Any],
-        settlementRows: [[String: Any]]
+        settlementRows: [[String: Any]],
+        assetRegistry: AssetRegistry
     ) throws {
         // Get action from metadata or transformed fields
         let action = primaryRow["metadata.action"] as? String
@@ -192,14 +197,16 @@ class TransactionBuilder {
                 transaction: transaction,
                 symbol: symbol,
                 quantity: quantity,
-                amount: absAmount
+                amount: absAmount,
+                assetRegistry: assetRegistry
             )
         } else if actionUpper.contains("YOU SOLD") || actionUpper.contains("SOLD") {
             try buildSellTransaction(
                 transaction: transaction,
                 symbol: symbol,
                 quantity: abs(quantity ?? 0),  // Quantity might be negative
-                amount: absAmount
+                amount: absAmount,
+                assetRegistry: assetRegistry
             )
         } else if actionUpper.contains("DIVIDEND") {
             try buildDividendTransaction(
@@ -207,23 +214,27 @@ class TransactionBuilder {
                 symbol: symbol,
                 quantity: quantity,
                 amount: absAmount,
-                isReinvested: quantity != nil && quantity != 0
+                isReinvested: quantity != nil && quantity != 0,
+                assetRegistry: assetRegistry
             )
         } else if actionUpper.contains("TRANSFERRED TO") || actionUpper.contains("TRANSFERRED FROM") {
             try buildTransferTransaction(
                 transaction: transaction,
                 amount: amount,  // Keep sign for transfers
-                isOutgoing: actionUpper.contains("TO")
+                isOutgoing: actionUpper.contains("TO"),
+                assetRegistry: assetRegistry
             )
         } else if actionUpper.contains("INTEREST") {
             try buildInterestTransaction(
                 transaction: transaction,
-                amount: absAmount
+                amount: absAmount,
+                assetRegistry: assetRegistry
             )
         } else if actionUpper.contains("FEE") || actionUpper.contains("COMMISSION") {
             try buildFeeTransaction(
                 transaction: transaction,
-                amount: absAmount
+                amount: absAmount,
+                assetRegistry: assetRegistry
             )
         } else {
             // Generic transaction
@@ -234,13 +245,15 @@ class TransactionBuilder {
                     transaction: transaction,
                     symbol: symbol,
                     quantity: quantity!,
-                    amount: amount
+                    amount: amount,
+                    assetRegistry: assetRegistry
                 )
             } else {
                 // Pure cash transaction
                 try buildGenericCashTransaction(
                     transaction: transaction,
-                    amount: amount
+                    amount: amount,
+                    assetRegistry: assetRegistry
                 )
             }
         }
@@ -252,54 +265,80 @@ class TransactionBuilder {
         transaction: Transaction,
         symbol: String,
         quantity: Decimal?,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
         guard let qty = quantity, qty > 0 else {
             throw TransactionBuilderError.invalidQuantity
         }
 
+        // Resolve asset through registry
+        let asset = assetRegistry.findOrCreate(symbol: symbol)
+
         // Debit: Asset increases
-        transaction.addDebit(
+        let debitEntry = JournalEntry(
             accountType: .asset,
             accountName: symbol,
-            amount: amount,
+            debitAmount: amount,
+            creditAmount: nil,
             quantity: qty,
-            quantityUnit: inferQuantityUnit(symbol: symbol)
+            quantityUnit: inferQuantityUnit(symbol: symbol),
+            transaction: transaction
         )
+        debitEntry.asset = asset
+        transaction.journalEntries.append(debitEntry)
 
         // Credit: Cash decreases
-        transaction.addCredit(
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
+        let creditEntry = JournalEntry(
             accountType: .cash,
             accountName: "USD",
-            amount: amount
+            debitAmount: nil,
+            creditAmount: amount,
+            transaction: transaction
         )
+        creditEntry.asset = usdAsset
+        transaction.journalEntries.append(creditEntry)
     }
 
     private static func buildSellTransaction(
         transaction: Transaction,
         symbol: String,
         quantity: Decimal,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
         guard quantity > 0 else {
             throw TransactionBuilderError.invalidQuantity
         }
 
+        // Resolve asset through registry
+        let asset = assetRegistry.findOrCreate(symbol: symbol)
+
         // Credit: Asset decreases
-        transaction.addCredit(
+        let creditEntry = JournalEntry(
             accountType: .asset,
             accountName: symbol,
-            amount: amount,
+            debitAmount: nil,
+            creditAmount: amount,
             quantity: quantity,
-            quantityUnit: inferQuantityUnit(symbol: symbol)
+            quantityUnit: inferQuantityUnit(symbol: symbol),
+            transaction: transaction
         )
+        creditEntry.asset = asset
+        transaction.journalEntries.append(creditEntry)
 
         // Debit: Cash increases
-        transaction.addDebit(
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
+        let debitEntry = JournalEntry(
             accountType: .cash,
             accountName: "USD",
-            amount: amount
+            debitAmount: amount,
+            creditAmount: nil,
+            transaction: transaction
         )
+        debitEntry.asset = usdAsset
+        transaction.journalEntries.append(debitEntry)
     }
 
     private static func buildDividendTransaction(
@@ -307,197 +346,282 @@ class TransactionBuilder {
         symbol: String,
         quantity: Decimal?,
         amount: Decimal,
-        isReinvested: Bool
+        isReinvested: Bool,
+        assetRegistry: AssetRegistry
     ) throws {
         if isReinvested && quantity != nil {
-            // Reinvested dividend - 4 entries
+            // Reinvested dividend
+            let asset = assetRegistry.findOrCreate(symbol: symbol)
 
             // 1. Debit: Asset increases
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .asset,
                 accountName: symbol,
-                amount: amount,
+                debitAmount: amount,
+                creditAmount: nil,
                 quantity: quantity,
-                quantityUnit: inferQuantityUnit(symbol: symbol)
+                quantityUnit: inferQuantityUnit(symbol: symbol),
+                transaction: transaction
             )
+            debitEntry.asset = asset
+            transaction.journalEntries.append(debitEntry)
 
             // 2. Credit: Dividend income
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .income,
                 accountName: "Dividend Income",
-                amount: amount
+                debitAmount: nil,
+                creditAmount: amount,
+                transaction: transaction
             )
-
-            // Note: The cash entries net to zero for reinvested dividends
-            // Some brokers show them, some don't. We'll omit for simplicity.
+            transaction.journalEntries.append(creditEntry)
 
         } else {
-            // Cash dividend - 2 entries
+            // Cash dividend
+            let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
 
             // 1. Debit: Cash increases
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: amount
+                debitAmount: amount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            debitEntry.asset = usdAsset
+            transaction.journalEntries.append(debitEntry)
 
             // 2. Credit: Dividend income
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .income,
                 accountName: "Dividend Income",
-                amount: amount
+                debitAmount: nil,
+                creditAmount: amount,
+                transaction: transaction
             )
+            transaction.journalEntries.append(creditEntry)
         }
     }
 
     private static func buildTransferTransaction(
         transaction: Transaction,
         amount: Decimal,
-        isOutgoing: Bool
+        isOutgoing: Bool,
+        assetRegistry: AssetRegistry
     ) throws {
         let absAmount = abs(amount)
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
 
         if isOutgoing {
             // Money leaving account
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: nil,
+                creditAmount: absAmount,
+                transaction: transaction
             )
+            creditEntry.asset = usdAsset
+            transaction.journalEntries.append(creditEntry)
 
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .equity,
                 accountName: "Owner Withdrawals",
-                amount: absAmount
+                debitAmount: absAmount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            transaction.journalEntries.append(debitEntry)
         } else {
             // Money entering account
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: absAmount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            debitEntry.asset = usdAsset
+            transaction.journalEntries.append(debitEntry)
 
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .equity,
                 accountName: "Owner Contributions",
-                amount: absAmount
+                debitAmount: nil,
+                creditAmount: absAmount,
+                transaction: transaction
             )
+            transaction.journalEntries.append(creditEntry)
         }
     }
 
     private static func buildInterestTransaction(
         transaction: Transaction,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
+
         // Debit: Cash increases
-        transaction.addDebit(
+        let debitEntry = JournalEntry(
             accountType: .cash,
             accountName: "USD",
-            amount: amount
+            debitAmount: amount,
+            creditAmount: nil,
+            transaction: transaction
         )
+        debitEntry.asset = usdAsset
+        transaction.journalEntries.append(debitEntry)
 
         // Credit: Interest income
-        transaction.addCredit(
+        let creditEntry = JournalEntry(
             accountType: .income,
             accountName: "Interest Income",
-            amount: amount
+            debitAmount: nil,
+            creditAmount: amount,
+            transaction: transaction
         )
+        transaction.journalEntries.append(creditEntry)
     }
 
     private static func buildFeeTransaction(
         transaction: Transaction,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
+
         // Debit: Expense increases
-        transaction.addDebit(
+        let debitEntry = JournalEntry(
             accountType: .expense,
             accountName: "Fees & Commissions",
-            amount: amount
+            debitAmount: amount,
+            creditAmount: nil,
+            transaction: transaction
         )
+        transaction.journalEntries.append(debitEntry)
 
         // Credit: Cash decreases
-        transaction.addCredit(
+        let creditEntry = JournalEntry(
             accountType: .cash,
             accountName: "USD",
-            amount: amount
+            debitAmount: nil,
+            creditAmount: amount,
+            transaction: transaction
         )
+        creditEntry.asset = usdAsset
+        transaction.journalEntries.append(creditEntry)
     }
 
     private static func buildGenericAssetTransaction(
         transaction: Transaction,
         symbol: String,
         quantity: Decimal,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
         let absAmount = abs(amount)
         let absQuantity = abs(quantity)
+        let asset = assetRegistry.findOrCreate(symbol: symbol)
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
 
         if amount < 0 {
             // Buying asset
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .asset,
                 accountName: symbol,
-                amount: absAmount,
+                debitAmount: absAmount,
+                creditAmount: nil,
                 quantity: absQuantity,
-                quantityUnit: inferQuantityUnit(symbol: symbol)
+                quantityUnit: inferQuantityUnit(symbol: symbol),
+                transaction: transaction
             )
+            debitEntry.asset = asset
+            transaction.journalEntries.append(debitEntry)
 
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: nil,
+                creditAmount: absAmount,
+                transaction: transaction
             )
+            creditEntry.asset = usdAsset
+            transaction.journalEntries.append(creditEntry)
         } else {
             // Selling asset
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .asset,
                 accountName: symbol,
-                amount: absAmount,
+                debitAmount: nil,
+                creditAmount: absAmount,
                 quantity: absQuantity,
-                quantityUnit: inferQuantityUnit(symbol: symbol)
+                quantityUnit: inferQuantityUnit(symbol: symbol),
+                transaction: transaction
             )
+            creditEntry.asset = asset
+            transaction.journalEntries.append(creditEntry)
 
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: absAmount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            debitEntry.asset = usdAsset
+            transaction.journalEntries.append(debitEntry)
         }
     }
 
     private static func buildGenericCashTransaction(
         transaction: Transaction,
-        amount: Decimal
+        amount: Decimal,
+        assetRegistry: AssetRegistry
     ) throws {
         let absAmount = abs(amount)
+        let usdAsset = assetRegistry.findOrCreate(symbol: "USD")
 
         if amount > 0 {
             // Cash inflow
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: absAmount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            debitEntry.asset = usdAsset
+            transaction.journalEntries.append(debitEntry)
 
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .income,
                 accountName: "Other Income",
-                amount: absAmount
+                debitAmount: nil,
+                creditAmount: absAmount,
+                transaction: transaction
             )
+            transaction.journalEntries.append(creditEntry)
         } else {
             // Cash outflow
-            transaction.addDebit(
+            let debitEntry = JournalEntry(
                 accountType: .expense,
                 accountName: "Other Expenses",
-                amount: absAmount
+                debitAmount: absAmount,
+                creditAmount: nil,
+                transaction: transaction
             )
+            transaction.journalEntries.append(debitEntry)
 
-            transaction.addCredit(
+            let creditEntry = JournalEntry(
                 accountType: .cash,
                 accountName: "USD",
-                amount: absAmount
+                debitAmount: nil,
+                creditAmount: absAmount,
+                transaction: transaction
             )
+            creditEntry.asset = usdAsset
+            transaction.journalEntries.append(creditEntry)
         }
     }
 

@@ -14,6 +14,10 @@ struct ParseStudioView: View {
     @Binding var selectedAccount: Account?
     @ObservedObject var session: ParseStudioSession
 
+    @State private var showingDuplicateAlert = false
+    @State private var duplicateBatch: ImportBatch?
+    @State private var pendingFileURL: URL?
+
     var body: some View {
         NavigationStack {
             if let account = selectedAccount {
@@ -68,6 +72,26 @@ struct ParseStudioView: View {
                 )
             }
         }
+        .alert("File Already Imported", isPresented: $showingDuplicateAlert) {
+            Button("View Existing", action: {
+                // TODO: Navigate to existing batch
+            })
+            Button("Import Anyway", action: {
+                if let url = pendingFileURL {
+                    importCSVFileAnyway(from: url)
+                }
+                pendingFileURL = nil
+                duplicateBatch = nil
+            })
+            Button("Cancel", role: .cancel, action: {
+                pendingFileURL = nil
+                duplicateBatch = nil
+            })
+        } message: {
+            if let batch = duplicateBatch {
+                Text("This file was already imported on \(batch.timestamp.formatted(date: .long, time: .shortened)) with \(batch.successfulRows) transactions.")
+            }
+        }
     }
 
     private func handleFileImport(_ result: Result<URL, Error>) {
@@ -94,6 +118,35 @@ struct ParseStudioView: View {
     }
 
     private func importCSVFile(from url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        guard let account = selectedAccount else { return }
+
+        // Calculate file hash for duplicate detection
+        let fileHash = ImportSession.calculateHash(data)
+
+        // Check for existing imports with same hash
+        let descriptor = FetchDescriptor<ImportBatch>()
+        if let allBatches = try? modelContext.fetch(descriptor) {
+            let duplicates = allBatches.filter { batch in
+                batch.account?.id == account.id &&
+                batch.rawFile?.sha256Hash == fileHash &&
+                batch.status != .rolledBack
+            }
+
+            if let existing = duplicates.first {
+                // Show duplicate alert
+                pendingFileURL = url
+                duplicateBatch = existing
+                showingDuplicateAlert = true
+                return
+            }
+        }
+
+        // No duplicate, proceed with import
+        importCSVFileAnyway(from: url)
+    }
+
+    private func importCSVFileAnyway(from url: URL) {
         guard let data = try? Data(contentsOf: url) else { return }
         guard let account = selectedAccount else { return }
 
@@ -129,6 +182,16 @@ struct ParseStudioWorkspace: View {
     let modelContext: ModelContext
 
     @State private var isGeneratingPreview = false
+    @State private var selectedVersion: ParsePlanVersion?
+    @State private var selectedCategorizationSession: CategorizationSession?
+    @State private var selectedBatches: Set<UUID> = []
+    @State private var hoveredRowIndex: Int?
+
+    @Query(sort: \ImportBatch.timestamp) private var allBatches: [ImportBatch]
+
+    private var accountBatches: [ImportBatch] {
+        allBatches.filter { $0.account?.id == account.id }
+    }
 
     private var parseEngine: ParseEngine {
         ParseEngine(modelContext: modelContext)
@@ -139,29 +202,52 @@ struct ParseStudioWorkspace: View {
             // Account context bar at the top
             AccountContextBar(account: account)
 
-            // Three-pane view (always full width)
+            // Five-pane view: Data Uploads | Raw CSV | Categorization | AI Results | Transactions
             HSplitView {
-                RawDataPanel(selectedFile: $selectedFile, showingFileImporter: $showingFileImporter)
-                    .frame(minWidth: 300, idealWidth: 400)
+                ImportHistoryPanel(account: account, selectedFile: $selectedFile, selectedBatches: $selectedBatches)
+                    .frame(minWidth: 200, idealWidth: 250, maxWidth: 350)
 
-                ParseRulesPanel(
-                    parsePlan: $parsePlan,
+                RawDataPanel(account: account, selectedBatches: selectedBatches, selectedFile: $selectedFile, showingFileImporter: $showingFileImporter)
+                    .frame(minWidth: 250, idealWidth: 350)
+
+                ParsePlanVersionsPanel(
                     account: account,
-                    selectedFile: selectedFile,
-                    showingAgentChat: $showingAgentChat
+                    selectedBatches: selectedBatches,
+                    selectedVersion: $selectedVersion,
+                    selectedCategorizationSession: $selectedCategorizationSession,
+                    parsePlan: $parsePlan
                 )
-                .frame(minWidth: 300, idealWidth: 400)
+                .frame(minWidth: 200, idealWidth: 250, maxWidth: 350)
 
-                ResultsPanel(
-                    parsePreview: parsePreview,
-                    parsePlan: parsePlan,
-                    importBatch: importBatch,
-                    isImporting: $isImporting
+                CategorizationResultsPanel(
+                    account: account,
+                    selectedCategorizationSession: $selectedCategorizationSession,
+                    parsePlan: $parsePlan
                 )
-                .frame(minWidth: 300, idealWidth: 400)
+                .frame(minWidth: 250, idealWidth: 350)
+
+                TransactionsPreviewPanel(
+                    account: account,
+                    selectedBatches: selectedBatches,
+                    selectedVersion: $selectedVersion,
+                    parsePlan: $parsePlan,
+                    selectedCategorizationSession: $selectedCategorizationSession,
+                    hoveredRowIndex: $hoveredRowIndex
+                )
+                .frame(minWidth: 250, idealWidth: 400)
             }
+            .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Default all batches to selected
+            selectedBatches = Set(accountBatches.map { $0.id })
+        }
+        .onChange(of: accountBatches.count) { _, _ in
+            // Auto-select new uploads
+            let newBatchIds = Set(accountBatches.map { $0.id })
+            selectedBatches = selectedBatches.union(newBatchIds)
+        }
         .onChange(of: parsePlan?.workingCopyData) { _, _ in
             generatePreview()
         }
@@ -302,19 +388,55 @@ struct AccountContextBar: View {
 }
 
 struct RawDataPanel: View {
+    let account: Account
+    let selectedBatches: Set<UUID>
     @Binding var selectedFile: RawFile?
     @Binding var showingFileImporter: Bool
     @State private var viewMode: CSVViewMode = .table
     @Environment(\.modelContext) private var modelContext
 
+    @Query(sort: \ImportBatch.timestamp) private var allBatches: [ImportBatch]
+
+    private var accountBatches: [ImportBatch] {
+        allBatches.filter { $0.account?.id == account.id && selectedBatches.contains($0.id) }
+    }
+
+    private var combinedRowCount: Int {
+        // Count actual data rows using CSVParser (filters out legalese/footers)
+        let parser = CSVParser()
+        var totalRows = 0
+
+        for batch in accountBatches {
+            guard let rawFile = batch.rawFile,
+                  let content = String(data: rawFile.content, encoding: .utf8),
+                  let csvData = try? parser.parse(content) else {
+                continue
+            }
+            totalRows += csvData.rowCount
+        }
+
+        return totalRows
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Panel header
             HStack {
-                Label("Raw Data", systemImage: "doc.text")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Raw Data", systemImage: "doc.text")
+                        .font(.headline)
 
-                if selectedFile != nil {
+                    Text("\(combinedRowCount) clean rows from \(accountBatches.count) files")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("(Legalese/footers filtered)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if !accountBatches.isEmpty {
                     Picker("View Mode", selection: $viewMode) {
                         Label("Table", systemImage: "tablecells").tag(CSVViewMode.table)
                         Label("Raw", systemImage: "doc.plaintext").tag(CSVViewMode.raw)
@@ -323,7 +445,6 @@ struct RawDataPanel: View {
                     .frame(width: 150)
                 }
 
-                Spacer()
                 Button(action: { showingFileImporter = true }) {
                     Label("Import CSV", systemImage: "square.and.arrow.down")
                 }
@@ -334,20 +455,21 @@ struct RawDataPanel: View {
 
             Divider()
 
-            // Content
-            if let file = selectedFile,
-               let content = String(data: file.content, encoding: .utf8) {
+            // Content - Always show combined data from selected batches
+            let combinedContent = getCombinedCSVContent()
+            if !combinedContent.isEmpty {
                 if viewMode == .table {
-                    CSVTableView(content: content)
+                    CSVTableView(content: combinedContent)
                 } else {
                     ScrollView([.horizontal, .vertical]) {
-                        Text(content)
+                        Text(combinedContent)
                             .font(.system(.body, design: .monospaced))
                             .padding()
                     }
+                    .frame(maxHeight: .infinity)
                 }
             } else {
-                VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 20) {
                     Image(systemName: "doc.badge.plus")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
@@ -368,11 +490,66 @@ struct RawDataPanel: View {
                             .foregroundColor(.secondary)
                             .font(.caption)
                     }
+
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
+        .frame(maxHeight: .infinity)
         .background(Color(NSColor.textBackgroundColor))
+    }
+
+    private func getCombinedCSVContent() -> String {
+        guard !accountBatches.isEmpty else { return "" }
+
+        // Get all raw files, sorted by timestamp to maintain chronological order
+        let sortedBatches = accountBatches.sorted { $0.timestamp < $1.timestamp }
+        let files = sortedBatches.compactMap { $0.rawFile }
+        guard !files.isEmpty else { return "" }
+
+        // Use proper CSV parser to get clean data (filters out legalese/footer automatically)
+        let parser = CSVParser()
+        var headers: [String] = []
+        var allDataRows: [[String]] = []
+        var seenRowHashes: Set<Int> = []
+
+        for file in files {
+            guard let content = String(data: file.content, encoding: .utf8),
+                  let csvData = try? parser.parse(content) else {
+                continue
+            }
+
+            // Use headers from first file
+            if headers.isEmpty {
+                headers = csvData.headers
+            }
+
+            // Collect data rows with deduplication
+            for row in csvData.rows {
+                let rowHash = row.hashValue
+                if !seenRowHashes.contains(rowHash) {
+                    allDataRows.append(row)
+                    seenRowHashes.insert(rowHash)
+                }
+            }
+        }
+
+        // Reconstruct CSV content
+        var combined = headers.joined(separator: ",") + "\n"
+        for row in allDataRows {
+            // Properly quote fields that contain commas
+            let quotedRow = row.map { field in
+                if field.contains(",") || field.contains("\"") {
+                    return "\"\(field.replacingOccurrences(of: "\"", with: "\"\""))\""
+                }
+                return field
+            }
+            combined += quotedRow.joined(separator: ",") + "\n"
+        }
+
+        return combined
     }
 }
 
@@ -632,13 +809,25 @@ struct ResultsPanel: View {
             if let preview = parsePreview {
                 ParseResultsView(preview: preview)
             } else {
-                ContentUnavailableView(
-                    "No preview",
-                    systemImage: "eye.slash",
-                    description: Text("Configure parse rules to see preview")
-                )
+                VStack(alignment: .leading, spacing: 16) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+
+                    Text("No Preview")
+                        .font(.headline)
+
+                    Text("Configure parse rules to see preview")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
+        .frame(maxHeight: .infinity)
         .background(Color(NSColor.textBackgroundColor))
         .sheet(isPresented: $showingCommitSheet) {
             if let plan = parsePlan {
@@ -927,9 +1116,14 @@ struct CSVTableView: View {
         Task {
             let parser = CSVParser()
             if let parsed = try? parser.parse(content) {
+                // Squelch noisy logs - only log on first parse or errors
+                // let totalLines = content.components(separatedBy: .newlines).count
+                // print("CSV Parsed: \(parsed.headers.count) headers, \(parsed.rowCount) clean data rows")
                 await MainActor.run {
                     csvData = parsed
                 }
+            } else {
+                print("❌ CSV Parse failed for content length: \(content.count)")
             }
         }
     }
@@ -951,20 +1145,31 @@ struct CSVTableWithTable: View {
 
 struct CSVTableFallback: View {
     let csvData: CSVData
-    private let columnWidth: CGFloat = 150
+    private let columnWidth: CGFloat = 75  // Half of 150
+    private let rowNumberWidth: CGFloat = 40
 
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
                 // Header row
                 HStack(spacing: 0) {
+                    // Row number header
+                    Text("#")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .padding(6)
+                        .frame(width: rowNumberWidth, alignment: .center)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .border(Color(NSColor.separatorColor), width: 0.5)
+
+                    // Column headers
                     ForEach(csvData.headers.indices, id: \.self) { index in
                         Text(csvData.headers[index])
                             .font(.caption)
                             .fontWeight(.bold)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                            .padding(8)
+                            .padding(6)
                             .frame(width: columnWidth, alignment: .leading)
                             .background(Color(NSColor.controlBackgroundColor))
                             .border(Color(NSColor.separatorColor), width: 0.5)
@@ -974,12 +1179,22 @@ struct CSVTableFallback: View {
                 // Data rows
                 ForEach(csvData.rows.indices, id: \.self) { rowIndex in
                     HStack(spacing: 0) {
+                        // Row number column
+                        Text("\(rowIndex + 1)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(6)
+                            .frame(width: rowNumberWidth, alignment: .center)
+                            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+                            .border(Color(NSColor.separatorColor), width: 0.5)
+
+                        // Data columns
                         ForEach(csvData.rows[rowIndex].indices, id: \.self) { colIndex in
                             Text(csvData.rows[rowIndex][colIndex])
                                 .font(.caption)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                                .padding(8)
+                                .padding(6)
                                 .frame(width: columnWidth, alignment: .leading)
                                 .border(Color(NSColor.separatorColor), width: 0.5)
                                 .help(csvData.rows[rowIndex][colIndex]) // Tooltip shows full content
@@ -989,6 +1204,7 @@ struct CSVTableFallback: View {
                 }
             }
         }
+        .frame(maxHeight: .infinity)
     }
 }
 

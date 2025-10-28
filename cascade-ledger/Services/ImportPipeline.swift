@@ -39,9 +39,7 @@ struct ImportError: Error {
 }
 
 /// Stage 1: Detect institution from file content
-protocol InstitutionDetector {
-    func detect(fileData: Data, fileName: String) -> Institution?
-}
+/// NOTE: See InstitutionDetector.swift for actual implementation
 
 /// Stage 2: Parse CSV into raw rows
 protocol ImportCSVParser {
@@ -54,94 +52,27 @@ struct ParsedCSV {
 }
 
 /// Stage 3: Detect settlement patterns
-protocol SettlementDetector {
-    func detectGroups(rows: [[String: String]]) -> [SettlementGroup]
-}
-
-struct SettlementGroup {
-    let rows: [Int]  // Row indices that form a settlement
-    let type: SettlementType
-}
-
-enum SettlementType: String {
-    case buy
-    case sell
-    case dividend
-    case transfer
-    case fee
-    case unknown
-}
+/// NOTE: See SettlementDetector.swift for actual protocol and implementations
 
 /// Stage 4: Transform CSV rows into transactions
-protocol ImportTransactionBuilder {
-    func build(
-        groups: [SettlementGroup],
-        rows: [[String: String]],
-        account: Account,
-        assetRegistry: AssetRegistry,
-        modelContext: ModelContext
-    ) async throws -> [Transaction]
-}
+/// NOTE: See TransactionBuilder.swift for actual implementation
 
 /// Default implementation of the import pipeline
+/// NOTE: This is a placeholder. Phase 3 will implement proper pipeline using new architecture
 class DefaultImportPipeline: ImportPipeline {
-    private let institutionDetector: InstitutionDetector
-    private let csvParser: ImportCSVParser
-    private let settlementDetector: SettlementDetector
-    private let transactionBuilder: ImportTransactionBuilder
-
-    init(
-        institutionDetector: InstitutionDetector,
-        csvParser: ImportCSVParser,
-        settlementDetector: SettlementDetector,
-        transactionBuilder: ImportTransactionBuilder
-    ) {
-        self.institutionDetector = institutionDetector
-        self.csvParser = csvParser
-        self.settlementDetector = settlementDetector
-        self.transactionBuilder = transactionBuilder
-    }
 
     func execute(
         session: ImportSession,
         fileData: Data,
         modelContext: ModelContext
     ) async throws -> ImportResult {
-        // Stage 1: Detect institution (if not already known)
-        // For now, skip - we'll use the ParsePlan's institution
+        // TODO: Implement proper pipeline with:
+        // 1. InstitutionDetector
+        // 2. SettlementDetector
+        // 3. TransactionBuilder with AssetRegistry
+        // 4. PositionCalculator updates
 
-        // Stage 2: Parse CSV
-        let parsed = try csvParser.parse(fileData: fileData)
-
-        // Stage 3: Detect settlement groups
-        let groups = settlementDetector.detectGroups(rows: parsed.rows)
-
-        // Stage 4: Build transactions
-        guard let account = session.account else {
-            throw ImportPipelineError.missingAccount
-        }
-
-        let transactions = try await transactionBuilder.build(
-            groups: groups,
-            rows: parsed.rows,
-            account: account,
-            assetRegistry: AssetRegistry.shared,
-            modelContext: modelContext
-        )
-
-        // Update session
-        session.totalRows = parsed.rows.count
-        session.successfulRows = transactions.reduce(0) { $0 + $1.journalEntries.count }
-        session.failedRows = parsed.rows.count - session.successfulRows
-        session.transactions = transactions
-
-        return ImportResult(
-            totalRows: parsed.rows.count,
-            successfulRows: session.successfulRows,
-            failedRows: session.failedRows,
-            transactions: transactions,
-            errors: []
-        )
+        throw ImportPipelineError.unsupportedInstitution
     }
 }
 

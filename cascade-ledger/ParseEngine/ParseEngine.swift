@@ -176,42 +176,18 @@ class ParseEngine: ObservableObject {
                             // Don't count as failed, just skipped
                         } else {
                             modelContext.insert(ledgerEntry)
-                            parseRun.ledgerEntries.append(ledgerEntry)
+                            // parseRun.ledgerEntries removed - can't store arrays in SwiftData
                             parseRun.successfulRows += 1
                         }
                     } else {
-                        // Record validation failure
-                        let error = ParseError(
-                            rowNumber: globalRowIndex,
-                            errorType: .validationFailed,
-                            message: "Validation failed",
-                            field: nil,
-                            value: nil
-                        )
-                        parseRun.errors.append(error)
+                        // Record validation failure (legacy error tracking removed)
                         parseRun.failedRows += 1
                     }
 
-                    // Create lineage mapping
-                    let lineage = LineageMapping(
-                        sourceRowNumber: globalRowIndex,
-                        sourceFields: rowDict,
-                        outputEntryId: isValid ? parseRun.ledgerEntries.last?.id : nil,
-                        transformsApplied: parsePlanVersion.definition.transforms.map { $0.name },
-                        validationResults: validationResults
-                    )
-                    parseRun.lineageMappings.append(lineage)
+                    // Legacy lineage mapping removed - will be replaced in Phase 3
 
                 } catch {
-                    // Record transform error
-                    let parseError = ParseError(
-                        rowNumber: globalRowIndex,
-                        errorType: .transformFailed,
-                        message: error.localizedDescription,
-                        field: nil,
-                        value: nil
-                    )
-                    parseRun.errors.append(parseError)
+                    // Record transform error (legacy error tracking removed)
                     parseRun.failedRows += 1
                 }
 
@@ -249,7 +225,7 @@ class ParseEngine: ObservableObject {
         print("✓ Successful: \(parseRun.successfulRows)")
         print("⊘ Duplicates skipped: \(duplicateCount)")
         print("✗ Failed: \(parseRun.failedRows)")
-        print("Ledger entries created: \(parseRun.ledgerEntries.count)")
+        print("Ledger entries created: \(parseRun.successfulRows)")
 
         try modelContext.save()
 
@@ -260,16 +236,18 @@ class ParseEngine: ObservableObject {
 
     // Check if transaction already exists (excluding current import batch)
     private func checkForDuplicate(_ entry: Transaction, currentBatchId: UUID) throws -> Bool {
-        let hash = entry.transactionHash
-        let batchId = currentBatchId
-        let descriptor = FetchDescriptor<Transaction>(
-            predicate: #Predicate<Transaction> { existing in
-                existing.transactionHash == hash &&
-                existing.importBatch?.id != batchId  // Exclude current batch
-            }
-        )
+        guard let hash = entry.sourceHash else {
+            return false // No hash, can't check for duplicates
+        }
 
-        let results = try modelContext.fetch(descriptor)
+        // Simplified predicate to avoid macro issues
+        let descriptor = FetchDescriptor<Transaction>()
+        let allTransactions = try modelContext.fetch(descriptor)
+
+        let results = allTransactions.filter { existing in
+            existing.sourceHash == hash &&
+            existing.importSession?.id != currentBatchId  // Exclude current batch
+        }
 
         if !results.isEmpty {
             let existing = results.first!
@@ -277,7 +255,6 @@ class ParseEngine: ObservableObject {
             print("     Hash: \(hash.prefix(16))...")
             print("     New: \(entry.date.formatted(date: .abbreviated, time: .omitted)) \(entry.transactionDescription.prefix(40)) \(entry.amount)")
             print("     Existing: \(existing.date.formatted(date: .abbreviated, time: .omitted)) \(existing.transactionDescription.prefix(40)) \(existing.amount)")
-            print("     Existing from batch: \(existing.importBatch?.batchName ?? existing.importBatch?.rawFile?.fileName ?? "Unknown")")
         }
 
         return !results.isEmpty
@@ -361,61 +338,32 @@ class ParseEngine: ObservableObject {
             ?? data["type"] as? String
             ?? data["action"] as? String
 
-        // Create ledger entry
+        // LEGACY: Create transaction with old single-entry pattern
+        // TODO: Phase 3 will refactor this to use proper double-entry TransactionBuilder
         let ledgerEntry = Transaction(
             date: date,
-            amount: amount,
             description: description,
-            account: account,
-            transactionType: transactionType
+            type: transactionType,
+            account: account
         )
 
-        // Set additional fields
-        ledgerEntry.importBatch = importBatch
-        ledgerEntry.parseRun = parseRun
-        ledgerEntry.sourceRowNumber = rowNumber
-        ledgerEntry.rawTransactionType = rawType // Preserve original CSV value
+        // Set fields compatible with new model
+        ledgerEntry.importSession = nil  // Will be set by caller
+        ledgerEntry.sourceRowNumbers = [rowNumber]
+        ledgerEntry.userCategory = data["category"] as? String
 
-        // Optional fields
-        ledgerEntry.category = data["category"] as? String
-        ledgerEntry.subcategory = data["subcategory"] as? String
-        ledgerEntry.normalizedDescription = data["normalizedDescription"] as? String
-        ledgerEntry.assetId = data["assetId"] as? String
+        // Generate source hash for deduplication
+        let hashString = "\(date.timeIntervalSince1970)|\(description)|\(amount)|\(account.id.uuidString)"
+        ledgerEntry.sourceHash = hashString
 
-        // Quantity fields (for investments)
-        if let quantityValue = data["quantity"] {
-            if let decimalQty = quantityValue as? Decimal {
-                ledgerEntry.quantity = decimalQty
-                print("✓ Quantity (Decimal): \(decimalQty)")
-            } else if let doubleQty = quantityValue as? Double {
-                ledgerEntry.quantity = Decimal(doubleQty)
-                print("✓ Quantity (Double→Decimal): \(doubleQty)")
-            } else if let intQty = quantityValue as? Int {
-                ledgerEntry.quantity = Decimal(intQty)
-                print("✓ Quantity (Int→Decimal): \(intQty)")
-            } else {
-                print("⚠️ Quantity value type not recognized: \(type(of: quantityValue))")
-            }
-        } else {
-            print("⚠️ No quantity field in data. Available fields: \(data.keys.joined(separator: ", "))")
-        }
+        // LEGACY: Old fields that don't exist in new model - skipped
+        // - parseRun (deprecated)
+        // - rawTransactionType (stub property)
+        // - normalizedDescription (not in new model)
+        // - quantity/quantityUnit (now in JournalEntry, not Transaction)
+        // - metadata (stub property)
 
-        ledgerEntry.quantityUnit = data["quantityUnit"] as? String
-            ?? inferQuantityUnit(assetId: data["assetId"] as? String)
-
-        print("Transaction: \(ledgerEntry.transactionDescription.prefix(50)) | Asset: \(ledgerEntry.assetId ?? "nil") | Qty: \(ledgerEntry.quantity?.description ?? "nil") \(ledgerEntry.quantityUnit ?? "")")
-
-        // Metadata - handle both direct metadata.* keys and unmapped fields
-        for (key, value) in data {
-            if key.hasPrefix("metadata.") {
-                // Explicitly mapped metadata field
-                let metadataKey = String(key.dropFirst("metadata.".count))
-                ledgerEntry.metadata[metadataKey] = String(describing: value)
-            } else if !["date", "amount", "description", "transactionDescription", "transactionType", "type", "action", "category", "subcategory", "assetId", "normalizedDescription"].contains(key) {
-                // Unmapped field - add to metadata (excluding type-related fields we already captured)
-                ledgerEntry.metadata[key] = String(describing: value)
-            }
-        }
+        print("Transaction: \(ledgerEntry.transactionDescription.prefix(50)) | Type: \(transactionType)")
 
         return ledgerEntry
     }
@@ -445,10 +393,10 @@ class ParseEngine: ObservableObject {
 
         // Default based on amount
         if let amount = data["amount"] as? Double {
-            return amount < 0 ? .debit : .credit
+            return amount < 0 ? .withdrawal : .deposit
         }
 
-        return .credit
+        return .other
     }
 
     // Infer quantity unit from asset ID
@@ -483,13 +431,31 @@ struct ParsePreview {
 
 struct ParseError {
     let rowNumber: Int
+    let errorType: ParseErrorType
     let message: String
+    let field: String?
+    let value: String?
+}
+
+enum ParseErrorType {
+    case transformFailed
+    case validationFailed
+    case missingField
+    case invalidFormat
 }
 
 struct ValidationResult {
     let ruleName: String
     let passed: Bool
     let message: String?
+    let severity: ValidationSeverity
+
+    init(ruleName: String, passed: Bool, message: String?, severity: ValidationSeverity = .error) {
+        self.ruleName = ruleName
+        self.passed = passed
+        self.message = message
+        self.severity = severity
+    }
 }
 
 struct TransformedRow: Identifiable {

@@ -27,6 +27,40 @@ final class Account {
     @Relationship(deleteRule: .cascade, inverse: \ImportBatch.account)
     var importBatches: [ImportBatch]
 
+    // Categorization mode selection (optional for backward compatibility)
+    var categorizationMode: CategorizationMode?
+
+    @Relationship(deleteRule: .cascade, inverse: \CategorizationSession.account)
+    var categorizationSessions: [CategorizationSession]
+
+    // Active categorization session (which set of transactions is "real" right now)
+    var activeCategorizationSessionId: UUID?
+
+    // Computed property with default
+    var effectiveCategorizationMode: CategorizationMode {
+        categorizationMode ?? .ruleBased
+    }
+
+    // Get the active categorization session
+    var activeCategorizationSession: CategorizationSession? {
+        guard let activeId = activeCategorizationSessionId else { return nil }
+        return categorizationSessions.first { $0.id == activeId }
+    }
+
+    // Get transactions from active session
+    var activeTransactions: [Transaction] {
+        activeCategorizationSession?.transactions ?? []
+    }
+
+    // Activate a categorization session
+    func activate(_ session: CategorizationSession) {
+        activeCategorizationSessionId = session.id
+    }
+
+    func deactivate() {
+        activeCategorizationSessionId = nil
+    }
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -36,9 +70,15 @@ final class Account {
         self.institution = institution
         self.parsePlans = []
         self.importBatches = []
+        self.categorizationSessions = []
         self.createdAt = Date()
         self.updatedAt = Date()
     }
+}
+
+enum CategorizationMode: String, Codable {
+    case ruleBased = "rule_based"       // Parse Plans (traditional)
+    case aiDirect = "ai_direct"         // AI Direct Categorization
 }
 
 @Model

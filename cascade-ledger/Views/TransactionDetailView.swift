@@ -148,8 +148,9 @@ struct TransactionDetailView: View {
                         }
                     }
 
-                    if let sourceRow = entry.sourceRowNumber {
-                        DetailRow(label: "Source Row", value: "\(sourceRow)")
+                    if !entry.sourceRowNumbers.isEmpty {
+                        let rowsString = entry.sourceRowNumbers.map { String($0) }.joined(separator: ", ")
+                        DetailRow(label: "Source Row(s)", value: rowsString)
                     }
 
                     if let parseRun = entry.parseRun,

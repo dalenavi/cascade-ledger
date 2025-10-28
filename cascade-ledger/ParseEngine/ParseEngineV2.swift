@@ -105,13 +105,7 @@ class ParseEngineV2: ObservableObject {
 
             } catch {
                 print("Transform error at row \(index): \(error)")
-                parseRun.errors.append(ParseError(
-                    rowNumber: index,
-                    errorType: .transformFailed,
-                    message: error.localizedDescription,
-                    field: nil,
-                    value: nil
-                ))
+                // Legacy error tracking removed
                 parseRun.failedRows += 1
                 skippedRows += 1
             }
@@ -139,7 +133,7 @@ class ParseEngineV2: ObservableObject {
                 let transaction = try TransactionBuilder.createTransaction(
                     from: rowGroup,
                     account: account,
-                    importBatch: importBatch
+                    importSession: nil  // Will be set below
                 )
 
                 // Check for duplicate
@@ -166,13 +160,7 @@ class ParseEngineV2: ObservableObject {
                 failedTransactions += 1
                 parseRun.failedRows += rowGroup.count
 
-                parseRun.errors.append(ParseError(
-                    rowNumber: rowGroup.first?["rowNumber"] as? Int ?? 0,
-                    errorType: .transformFailed,
-                    message: "Transaction creation failed: \(error.localizedDescription)",
-                    field: nil,
-                    value: nil
-                ))
+                // Legacy error tracking removed
             }
 
             let progressValue = 0.5 + (Double(groupIndex) / Double(rowGroups.count) * 0.5)
@@ -242,16 +230,18 @@ class ParseEngineV2: ObservableObject {
         let hash = hashString.data(using: .utf8)!.base64EncodedString().prefix(16)
 
         // Check for existing transaction with similar characteristics
-        let batchId = transaction.importBatch?.id
-        let descriptor = FetchDescriptor<Transaction>(
-            predicate: #Predicate<Transaction> { existing in
-                existing.date == date &&
-                existing.transactionDescription == description &&
-                existing.importBatch?.id != batchId
-            }
-        )
+        let sessionId = transaction.importSession?.id
 
-        let results = try modelContext.fetch(descriptor)
+        // Simplified predicate to avoid macro issues
+        let descriptor = FetchDescriptor<Transaction>()
+        let allTransactions = try modelContext.fetch(descriptor)
+
+        let results = allTransactions.filter { existing in
+            existing.date == date &&
+            existing.transactionDescription == description &&
+            existing.importSession?.id != sessionId
+        }
+
         return !results.isEmpty
     }
 
@@ -275,28 +265,28 @@ class ParseEngineV2: ObservableObject {
 
         // Fetch all existing ledger entries
         let descriptor = FetchDescriptor<Transaction>(
-            sortBy: [SortDescriptor(\.date), SortDescriptor(\.sourceRowNumber)]
+            sortBy: [SortDescriptor(\.date)]
         )
         let ledgerEntries = try modelContext.fetch(descriptor)
 
         print("=== Migration Starting ===")
         print("Found \(ledgerEntries.count) ledger entries to migrate")
 
-        // Group by import batch and approximate transaction
-        var entriesByBatch: [UUID: [Transaction]] = [:]
+        // Group by import session and approximate transaction
+        var entriesBySession: [UUID: [Transaction]] = [:]
         for entry in ledgerEntries {
-            let batchId = entry.importBatch?.id ?? UUID()
-            entriesByBatch[batchId, default: []].append(entry)
+            let sessionId = entry.importSession?.id ?? UUID()
+            entriesBySession[sessionId, default: []].append(entry)
         }
 
         var migratedCount = 0
         var failedCount = 0
 
-        for (batchId, batchEntries) in entriesByBatch {
-            print("Processing batch \(batchId) with \(batchEntries.count) entries")
+        for (sessionId, sessionEntries) in entriesBySession {
+            print("Processing session \(sessionId) with \(sessionEntries.count) entries")
 
             // Group entries into potential transactions
-            let groups = groupLedgerEntriesIntoTransactions(batchEntries)
+            let groups = groupLedgerEntriesIntoTransactions(sessionEntries)
 
             for group in groups {
                 do {
@@ -330,7 +320,7 @@ class ParseEngineV2: ObservableObject {
         var currentGroup: [Transaction] = []
         var lastDate: Date?
 
-        for entry in entries.sorted(by: { $0.date < $1.date || ($0.date == $1.date && ($0.sourceRowNumber ?? 0) < ($1.sourceRowNumber ?? 0)) }) {
+        for entry in entries.sorted(by: { $0.date < $1.date || ($0.date == $1.date && ($0.sourceRowNumbers.first ?? 0) < ($1.sourceRowNumbers.first ?? 0)) }) {
             // Start new group if date changes or significant time gap
             if let last = lastDate, entry.date != last {
                 if !currentGroup.isEmpty {

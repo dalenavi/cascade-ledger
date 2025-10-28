@@ -27,7 +27,21 @@ final class Transaction {
     // User categorization overrides
     var userTransactionType: TransactionType?
     var userCategory: String?
-    var tags: [String]
+    var tagsData: Data?  // JSON-encoded array of tags
+
+    // Computed property for tags
+    var tags: [String] {
+        get {
+            guard let data = tagsData,
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            tagsData = try? JSONEncoder().encode(newValue)
+        }
+    }
 
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \JournalEntry.transaction)
@@ -39,12 +53,36 @@ final class Transaction {
     @Relationship
     var importSession: ImportSession?
 
+    @Relationship
+    var categorizationSession: CategorizationSession?
+
     @Relationship(deleteRule: .nullify, inverse: \CategorizationAttempt.transaction)
     var categorizationAttempts: [CategorizationAttempt]
 
     // Source tracking
-    var sourceRowNumbers: [Int]       // CSV rows that created this transaction
+    var sourceRowNumbersData: Data?   // JSON-encoded array of row numbers
     var sourceHash: String?           // Hash for deduplication
+
+    // Computed property for sourceRowNumbers
+    var sourceRowNumbers: [Int] {
+        get {
+            guard let data = sourceRowNumbersData,
+                  let array = try? JSONDecoder().decode([Int].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            sourceRowNumbersData = try? JSONEncoder().encode(newValue)
+        }
+    }
+
+    // Duplicate tracking
+    var isDuplicate: Bool
+    var duplicateOf: UUID?
+
+    // Reconciliation
+    var isReconciled: Bool
 
     // Audit fields
     var createdAt: Date
@@ -147,6 +185,24 @@ final class Transaction {
         [:]  // Stub for now
     }
 
+    /// Compatibility: Legacy importBatch field (maps to importSession)
+    var importBatch: ImportBatch? {
+        get { nil }  // Legacy field not used in new model
+        set { }
+    }
+
+    /// Compatibility: Legacy transactionHash (maps to sourceHash)
+    var transactionHash: String? {
+        get { sourceHash }
+        set { sourceHash = newValue }
+    }
+
+    /// Compatibility: Legacy parseRun field (deprecated)
+    var parseRun: ParseRun? {
+        get { nil }
+        set { }
+    }
+
     /// Get total quantity change for an asset
     func quantityChange(for assetId: String) -> Decimal {
         journalEntries
@@ -175,9 +231,12 @@ final class Transaction {
         self.transactionType = type
         self.account = account
         self.journalEntries = []
-        self.sourceRowNumbers = []
-        self.tags = []
+        // Initialize Data fields directly (computed properties need fully initialized self)
+        self.sourceRowNumbersData = try? JSONEncoder().encode([Int]())
+        self.tagsData = try? JSONEncoder().encode([String]())
         self.categorizationAttempts = []
+        self.isDuplicate = false
+        self.isReconciled = false
         self.createdAt = Date()
         self.updatedAt = Date()
     }

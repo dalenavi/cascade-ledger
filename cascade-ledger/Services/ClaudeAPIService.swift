@@ -108,7 +108,7 @@ class ClaudeAPIService: ObservableObject {
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        urlRequest.timeoutInterval = 30
+        urlRequest.timeoutInterval = 180  // 3 minutes for large categorization tasks
 
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase

@@ -138,11 +138,11 @@ class LedgerStore: ObservableObject {
     // Get account balance
     func getAccountBalance(_ account: Account) async throws -> Decimal {
         let entries = try await getLedgerEntriesForAccount(account)
-        return entries.reduce(Decimal.zero) { total, entry in
+        return entries.reduce(0 as Decimal) { total, entry in
             switch entry.transactionType {
-            case .credit, .deposit, .dividend, .interest:
+            case .deposit, .dividend, .interest:
                 return total + entry.amount
-            case .debit, .withdrawal, .fee, .tax:
+            case .withdrawal, .fee, .tax:
                 return total - entry.amount
             case .buy:
                 return total - entry.amount
@@ -151,6 +151,9 @@ class LedgerStore: ObservableObject {
             case .transfer:
                 // Transfers need special handling based on source/destination
                 return total
+            case .other:
+                // Use sign of amount to determine direction
+                return total + entry.amount
             }
         }
     }
