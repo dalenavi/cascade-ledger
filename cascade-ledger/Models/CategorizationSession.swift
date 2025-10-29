@@ -24,10 +24,28 @@ final class CategorizationSession {
     var sourceRowHashesData: Data?  // JSON-encoded array of hashes
     var totalSourceRows: Int
 
+    // Row exclusions (non-transactional rows like disclaimers)
+    var excludedRowNumbersData: Data?  // JSON-encoded array of row numbers
+
+    // Computed property for excluded row numbers
+    var excludedRowNumbers: [Int] {
+        get {
+            guard let data = excludedRowNumbersData,
+                  let array = try? JSONDecoder().decode([Int].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            excludedRowNumbersData = try? JSONEncoder().encode(newValue)
+        }
+    }
+
     // Chunking/Progress state
     var processedRowsCount: Int              // How many rows processed so far
     var isComplete: Bool                     // All chunks processed
     var isPaused: Bool                       // Paused by user
+    var errorMessage: String?                // Error that caused pause (if any)
 
     // Computed property for sourceRowHashes
     var sourceRowHashes: [String] {
@@ -62,6 +80,12 @@ final class CategorizationSession {
     @Relationship(deleteRule: .cascade, inverse: \CategorizationBatch.session)
     var batches: [CategorizationBatch]
 
+    @Relationship(deleteRule: .cascade, inverse: \ReviewSession.categorizationSession)
+    var reviewSessions: [ReviewSession]
+
+    @Relationship(deleteRule: .cascade, inverse: \ReconciliationSession.categorizationSession)
+    var reconciliationSessions: [ReconciliationSession]
+
     // Statistics
     var transactionCount: Int
     var balancedCount: Int
@@ -94,6 +118,8 @@ final class CategorizationSession {
         self.aiPromptVersion = promptVersion
         self.transactions = []
         self.batches = []
+        self.reviewSessions = []
+        self.reconciliationSessions = []
         self.transactionCount = 0
         self.balancedCount = 0
         self.unbalancedCount = 0
@@ -119,10 +145,70 @@ final class CategorizationSession {
         balancedCount = transactions.filter { $0.isBalanced }.count
         unbalancedCount = transactions.filter { !$0.isBalanced }.count
     }
+
+    /// Build coverage index mapping row numbers to transactions
+    func buildCoverageIndex() -> [Int: RowCoverage] {
+        var index: [Int: RowCoverage] = [:]
+
+        for transaction in transactions {
+            for rowNum in transaction.sourceRowNumbers {
+                if index[rowNum] == nil {
+                    index[rowNum] = RowCoverage(rowNumber: rowNum, transactionIds: [])
+                }
+                index[rowNum]?.transactionIds.append(transaction.id)
+            }
+        }
+
+        return index
+    }
+
+    /// Find row numbers that are not covered by any transaction and not excluded
+    func findUncoveredRows() -> [Int] {
+        let index = buildCoverageIndex()
+        let allRowNumbers = Set(1...totalSourceRows)
+        let coveredRowNumbers = Set(index.keys)
+        let excludedRowNumbers = Set(self.excludedRowNumbers)
+
+        // Uncovered = all rows - covered rows - excluded rows
+        return Array(allRowNumbers.subtracting(coveredRowNumbers).subtracting(excludedRowNumbers)).sorted()
+    }
+
+    /// Get coverage percentage (excluding non-transactional rows)
+    var coveragePercentage: Double {
+        guard totalSourceRows > 0 else { return 0 }
+        let transactionalRows = totalSourceRows - excludedRowNumbers.count
+        guard transactionalRows > 0 else { return 1.0 }  // All excluded = 100% coverage
+        let coveredCount = buildCoverageIndex().count
+        return Double(coveredCount) / Double(transactionalRows)
+    }
+
+    /// Get effective total rows (excluding non-transactional rows)
+    var effectiveSourceRows: Int {
+        totalSourceRows - excludedRowNumbers.count
+    }
+
+    /// Find transactions that are unbalanced
+    func findUnbalancedTransactions() -> [Transaction] {
+        transactions.filter { !$0.isBalanced }
+    }
 }
 
 enum SessionMode: String, Codable {
     case full = "full"                    // Complete categorization of all rows
     case incremental = "incremental"      // Future: Delta from base version (new rows)
     case override = "override"            // Future: Selective re-categorization of specific rows
+}
+
+/// Row coverage information
+struct RowCoverage {
+    var rowNumber: Int
+    var transactionIds: [UUID]
+    var isCovered: Bool { !transactionIds.isEmpty }
+}
+
+/// Gap analysis results
+struct GapAnalysis {
+    var uncoveredRows: [Int]
+    var orphanedTransactions: [Transaction]  // Transactions with no valid source rows
+    var unbalancedTransactions: [Transaction]
 }

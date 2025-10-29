@@ -84,6 +84,11 @@ final class Transaction {
     // Reconciliation
     var isReconciled: Bool
 
+    // Balance tracking (from CSV and calculated)
+    var csvBalance: Decimal?              // Balance from CSV row (if available)
+    var calculatedBalance: Decimal?       // Running balance calculated from journal entries
+    var balanceDiscrepancy: Decimal?      // Difference between CSV and calculated
+
     // Audit fields
     var createdAt: Date
     var updatedAt: Date
@@ -103,10 +108,30 @@ final class Transaction {
         return difference < 0.01  // Allow for minor rounding differences
     }
 
-    /// Net cash impact (sum of all USD/cash journal entries)
+    /// Check if balance discrepancy exists (significant difference)
+    var hasBalanceDiscrepancy: Bool {
+        guard let discrepancy = balanceDiscrepancy else { return false }
+        return abs(discrepancy) > 0.01
+    }
+
+    /// Net cash impact (sum of cash entries using account's balance instrument)
     var netCashImpact: Decimal {
-        journalEntries
-            .filter { $0.accountType == .cash }
+        // Get the balance instrument from the account (defaults to "Cash USD")
+        let balanceInstrument = account?.balanceInstrument ?? "Cash USD"
+
+        return journalEntries
+            .filter { entry in
+                // Include cash type entries
+                if entry.accountType == .cash {
+                    return true
+                }
+                // Include entries matching the account's balance instrument
+                // (e.g., SPAXX for Fidelity, VMMXX for Vanguard)
+                if entry.accountName.uppercased() == balanceInstrument.uppercased() {
+                    return true
+                }
+                return false
+            }
             .reduce(0) { sum, entry in
                 let debit = entry.debitAmount ?? 0
                 let credit = entry.creditAmount ?? 0

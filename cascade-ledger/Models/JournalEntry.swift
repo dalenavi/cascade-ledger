@@ -37,9 +37,17 @@ final class JournalEntry {
     @Relationship
     var asset: Asset?  // Link to Asset master record for asset entries
 
-    // Source tracking
-    var sourceRowNumber: Int?         // Which CSV row created this entry
-    var sourceData: String?           // Raw CSV data for audit
+    // Source tracking (legacy)
+    var sourceRowNumber: Int?         // Which CSV row created this entry (deprecated)
+    var sourceData: String?           // Raw CSV data for audit (deprecated)
+
+    // Source provenance (new)
+    @Relationship
+    var sourceRows: [SourceRow]      // Many-to-many: entry can reference multiple rows
+
+    // Amount validation
+    var csvAmount: Decimal?          // Expected amount from source CSV
+    var amountDiscrepancy: Decimal?  // Difference between actual and CSV amount
 
     // Metadata
     var metadata: [String: String]
@@ -84,6 +92,21 @@ final class JournalEntry {
         return 0
     }
 
+    /// Whether this entry has an amount discrepancy vs CSV
+    var hasAmountDiscrepancy: Bool {
+        guard let csvAmount = csvAmount else { return false }
+        return abs(amount - csvAmount) > 0.01
+    }
+
+    /// Calculate discrepancy if CSV amount is available
+    func calculateAmountDiscrepancy() {
+        guard let csvAmount = csvAmount else {
+            amountDiscrepancy = nil
+            return
+        }
+        amountDiscrepancy = amount - csvAmount
+    }
+
     init(
         accountType: AccountType,
         accountName: String,
@@ -102,6 +125,7 @@ final class JournalEntry {
         self.quantityUnit = quantityUnit
         self.transaction = transaction
         self.metadata = [:]
+        self.sourceRows = []
 
         // Calculate price if we have both amount and quantity
         let amt = debitAmount ?? creditAmount ?? 0

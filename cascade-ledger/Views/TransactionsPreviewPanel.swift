@@ -63,8 +63,13 @@ struct TransactionsPreviewPanel: View {
             transactions = previewTransactions
         }
 
-        // Sort chronologically (newest first)
-        return transactions.sorted { $0.date > $1.date }
+        // Sort by CSV file order (newest first for display)
+        // Fidelity CSV is reverse chronological: lower row number = newer
+        return transactions.sorted { t1, t2 in
+            let minRow1 = t1.sourceRowNumbers.min() ?? Int.max
+            let minRow2 = t2.sourceRowNumbers.min() ?? Int.max
+            return minRow1 < minRow2  // Lower row number = newer = show first
+        }
     }
 
     var body: some View {
@@ -500,6 +505,16 @@ struct TransactionPreviewCard: View {
     }
 
     var body: some View {
+        let _ = {
+            // Debug logging for first few transactions
+            if transaction.sourceRowNumbers.first ?? 0 <= 10 {
+                print("🎨 Rendering txn: \(transaction.transactionDescription)")
+                print("   calculatedBalance: \(transaction.calculatedBalance?.description ?? "nil")")
+                print("   csvBalance: \(transaction.csvBalance?.description ?? "nil")")
+                print("   hasBalanceDiscrepancy: \(transaction.hasBalanceDiscrepancy)")
+            }
+        }()
+
         VStack(alignment: .leading, spacing: 0) {
             // Collapsible header
             Button(action: { isExpanded.toggle() }) {
@@ -518,13 +533,47 @@ struct TransactionPreviewCard: View {
 
                     Spacer()
 
+                    // Balance column (always show)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Balance")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                        if let calcBalance = transaction.calculatedBalance {
+                            Text(formatAmount(calcBalance))
+                                .font(.caption)
+                                .foregroundColor(transaction.hasBalanceDiscrepancy ? .red : .secondary)
+                        } else {
+                            Text("—")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if transaction.hasBalanceDiscrepancy, let discrepancy = transaction.balanceDiscrepancy {
+                            HStack(spacing: 2) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption2)
+                                Text("Off by \(abs(discrepancy), format: .currency(code: "USD"))")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.red)
+                        } else if transaction.csvBalance != nil {
+                            Text("✓")
+                                .font(.caption2)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    .frame(minWidth: 90)
+
                     Text(formatAmount(transaction.amount))
                         .font(.subheadline)
                         .fontWeight(.semibold)
+                        .frame(minWidth: 80, alignment: .trailing)
 
                     Text(transaction.date.formatted(date: .abbreviated, time: .omitted))
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .frame(minWidth: 80, alignment: .trailing)
                 }
                 .padding(12)
             }
@@ -569,6 +618,56 @@ struct TransactionPreviewCard: View {
                         Text("Debits: \(formatAmount(transaction.totalDebits)) | Credits: \(formatAmount(transaction.totalCredits))")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                    }
+
+                    // Balance details
+                    if transaction.calculatedBalance != nil || transaction.csvBalance != nil {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Balance Details:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+
+                            HStack(spacing: 12) {
+                                if let calcBalance = transaction.calculatedBalance {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Calculated")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text(formatAmount(calcBalance))
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                            .foregroundColor(transaction.hasBalanceDiscrepancy ? .red : .primary)
+                                    }
+                                }
+
+                                if let csvBalance = transaction.csvBalance {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("CSV Balance")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text(formatAmount(csvBalance))
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                    }
+                                }
+
+                                if let discrepancy = transaction.balanceDiscrepancy, abs(discrepancy) > 0.01 {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Discrepancy")
+                                            .font(.caption2)
+                                            .foregroundColor(.red)
+                                        Text(formatAmount(discrepancy))
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(8)
+                        .background(transaction.hasBalanceDiscrepancy ? Color.red.opacity(0.1) : Color.blue.opacity(0.05))
+                        .cornerRadius(6)
                     }
 
                     // Journal entries

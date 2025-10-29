@@ -59,6 +59,9 @@ struct MainView: View {
                     Label("Parse Plans", systemImage: "doc.badge.gearshape")
                         .tag("parse-plans")
 
+                    Label("Background Jobs", systemImage: "gearshape.2")
+                        .tag("jobs")
+
                     Label("Price Data", systemImage: "chart.line.uptrend.xyaxis.circle")
                         .tag("price-data")
 
@@ -104,6 +107,8 @@ struct MainView: View {
                 ImportHistoryView()
             case "parse-plans":
                 ParsePlansView()
+            case "jobs":
+                JobsView()
             case "price-data":
                 PriceDataView()
             case "settings":
@@ -125,6 +130,9 @@ struct MainView: View {
     private func initializeStores() {
         // Initialize stores that need the model context
         _ = AccountStore(modelContext: modelContext)
+
+        // Configure JobManager for background job management
+        JobManager.shared.configure(modelContext: modelContext)
     }
 }
 

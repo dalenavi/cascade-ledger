@@ -36,6 +36,17 @@ final class Account {
     // Active categorization session (which set of transactions is "real" right now)
     var activeCategorizationSessionId: UUID?
 
+    // CSV field mapping configuration
+    var csvFieldMappingJSON: Data?  // Encoded CSVFieldMapping
+
+    // Balance instrument configuration
+    // Defines which asset/cash account represents the "cash balance" for this account
+    // Examples: "SPAXX" (Fidelity), "Cash USD" (banks), "VMMXX" (Vanguard)
+    var balanceInstrument: String? = "Cash USD"  // Default to Cash USD
+
+    // Categorization context for AI learning
+    var categorizationContext: String?
+
     // Computed property with default
     var effectiveCategorizationMode: CategorizationMode {
         categorizationMode ?? .ruleBased
@@ -73,6 +84,42 @@ final class Account {
         self.categorizationSessions = []
         self.createdAt = Date()
         self.updatedAt = Date()
+    }
+}
+
+// MARK: - CSV Field Mapping
+
+extension Account {
+    /// Decoded CSV field mapping
+    var csvFieldMapping: CSVFieldMapping? {
+        get {
+            guard let data = csvFieldMappingJSON else { return nil }
+            return try? JSONDecoder().decode(CSVFieldMapping.self, from: data)
+        }
+        set {
+            if let mapping = newValue {
+                csvFieldMappingJSON = try? JSONEncoder().encode(mapping)
+            } else {
+                csvFieldMappingJSON = nil
+            }
+            updatedAt = Date()
+        }
+    }
+
+    /// Update categorization context with a new entry
+    func updateCategorizationContext(_ update: String) {
+        if let existing = categorizationContext, !existing.isEmpty {
+            categorizationContext = "\(existing)\n\n\(update)"
+        } else {
+            categorizationContext = update
+        }
+        updatedAt = Date()
+    }
+
+    /// Clear categorization context
+    func clearCategorizationContext() {
+        categorizationContext = nil
+        updatedAt = Date()
     }
 }
 

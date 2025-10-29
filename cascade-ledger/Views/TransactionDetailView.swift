@@ -58,6 +58,101 @@ struct TransactionDetailView: View {
                     }
                 }
 
+                // Balance Information
+                if entry.csvBalance != nil || entry.calculatedBalance != nil {
+                    Section("Balance") {
+                        if let calculatedBalance = entry.calculatedBalance {
+                            HStack {
+                                Text("Running Balance")
+                                Spacer()
+                                Text(calculatedBalance, format: .currency(code: "USD"))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if let csvBalance = entry.csvBalance {
+                            HStack {
+                                Text("CSV Balance")
+                                Spacer()
+                                Text(csvBalance, format: .currency(code: "USD"))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if entry.hasBalanceDiscrepancy, let discrepancy = entry.balanceDiscrepancy {
+                            HStack {
+                                Label("Discrepancy", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.red)
+                                Spacer()
+                                Text(discrepancy, format: .currency(code: "USD"))
+                                    .foregroundColor(.red)
+                                    .bold()
+                            }
+                        }
+                    }
+                }
+
+                // Journal Entries with Source Provenance
+                if !entry.journalEntries.isEmpty {
+                    Section("Journal Entries") {
+                        ForEach(entry.journalEntries) { journalEntry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                // Entry type and account
+                                HStack {
+                                    Text(journalEntry.isDebit ? "DR:" : "CR:")
+                                        .font(.caption)
+                                        .foregroundColor(journalEntry.isDebit ? .red : .green)
+                                        .bold()
+                                    Text(journalEntry.accountName)
+                                        .font(.body)
+                                    Spacer()
+                                    Text(journalEntry.amount, format: .currency(code: "USD"))
+                                        .font(.body)
+                                        .bold()
+                                }
+
+                                // Amount validation
+                                if let csvAmount = journalEntry.csvAmount {
+                                    HStack(spacing: 4) {
+                                        Text("CSV Amount:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(csvAmount, format: .currency(code: "USD"))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+
+                                        if journalEntry.hasAmountDiscrepancy {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .font(.caption)
+                                                .foregroundColor(.red)
+                                            Text("Mismatch!")
+                                                .font(.caption)
+                                                .foregroundColor(.red)
+                                        } else {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.caption)
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                }
+
+                                // Source rows
+                                if !journalEntry.sourceRows.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Text("From rows:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(journalEntry.sourceRows.map { "#\($0.globalRowNumber)" }.joined(separator: ", "))
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
                 // Transaction type classification
                 Section("Transaction Type") {
                     Picker("Type", selection: $selectedTransactionType) {

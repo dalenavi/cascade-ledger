@@ -65,67 +65,71 @@ class DirectCategorizationService: ObservableObject {
             fatalError("DirectCategorizationService requires an existing session to be passed in")
         }
 
-        if session.isPaused {
+        // Log resume vs fresh start
+        if session.processedRowsCount > 0 {
+            print("📋 Resuming session v\(session.versionNumber) from array index \(session.processedRowsCount)")
+            print("   Already have \(session.transactionCount) transactions")
+            print("   Already covered \(session.buildCoverageIndex().count) rows")
+            currentStep = "Resuming from array index \(session.processedRowsCount)..."
             session.isPaused = false
-            print("📋 Resuming paused session v\(session.versionNumber)")
-            currentStep = "Resuming from row \(session.processedRowsCount + 1)..."
         } else {
-            print("📋 Starting session v\(session.versionNumber)")
+            print("📋 Starting fresh session v\(session.versionNumber)")
         }
 
         // Configure AssetRegistry
         AssetRegistry.shared.configure(modelContext: modelContext)
 
-        // Sort chronologically by ACTUAL date (parse MM/dd/yyyy format)
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "MM/dd/yyyy"
-
+        // CRITICAL: Preserve original CSV file order - it's already chronological!
+        // Fidelity CSV is in REVERSE chronological order (newest first)
+        // Sort DESCENDING by row number to get oldest-to-newest for processing
         let sortedRows = csvRows.sorted { (row1, row2) in
-            let dateStr1 = row1["Run Date"] ?? ""
-            let dateStr2 = row2["Run Date"] ?? ""
-            let date1 = dateFormatter.date(from: dateStr1) ?? Date.distantPast
-            let date2 = dateFormatter.date(from: dateStr2) ?? Date.distantPast
-            return date1 > date2  // LATEST first (reverse chronological)
+            let rowNum1 = Int(row1["_globalRowNumber"] ?? "0") ?? 0
+            let rowNum2 = Int(row2["_globalRowNumber"] ?? "0") ?? 0
+            return rowNum1 > rowNum2  // Reverse file order: higher row = older = process first
         }
 
-        print("📋 Processing \(sortedRows.count) rows in REVERSE chronological order (latest first)")
-        print("   Preserving original row numbers for provenance")
+        print("📋 Processing \(sortedRows.count) rows in CHRONOLOGICAL ORDER (oldest first)")
+        print("   CSV file is reversed to get oldest→newest sequence")
         if let firstRow = sortedRows.first {
             let rowNum = firstRow["_globalRowNumber"] ?? "?"
             let date = firstRow["Run Date"] ?? "?"
-            print("   First row to process: #\(rowNum) (latest date: \(date))")
+            print("   Starting with: #\(rowNum) (oldest date: \(date))")
         }
         if let lastRow = sortedRows.last {
             let rowNum = lastRow["_globalRowNumber"] ?? "?"
             let date = lastRow["Run Date"] ?? "?"
-            print("   Last row to process: #\(rowNum) (earliest date: \(date))")
+            print("   Ending with: #\(rowNum) (newest date: \(date))")
         }
 
         // Process with windowed approach
         let transactionsPerChunk = 10
         let windowSize = 30  // Reduced from 100 to lower token usage
 
-        let startRowIndex = session.processedRowsCount
         let alreadyProcessedTransactions = session.transactionCount
 
         print("📋 Resume state: \(alreadyProcessedTransactions) transactions, \(session.batches.count) existing batches")
 
-        // Estimate total transactions needed (~50% of rows become transactions with settlement grouping)
-        let estimatedTotalTransactions = (csvRows.count / 2)
-        let remainingTransactions = estimatedTotalTransactions - alreadyProcessedTransactions
-        totalChunks = max(1, (remainingTransactions + transactionsPerChunk - 1) / transactionsPerChunk)
-
         var processedTransactionCount = alreadyProcessedTransactions
-        var currentArrayIndex = 0  // Index into sortedRows array
+        // Always continue from where we left off (for fresh starts, processedRowsCount = 0)
+        var currentArrayIndex = session.processedRowsCount
 
         // Track which global row numbers have been covered
         var coveredGlobalRows = Set(session.transactions.flatMap { $0.sourceRowNumbers })
+
+        print("📍 Starting position:")
+        print("   currentArrayIndex: \(currentArrayIndex)")
+        print("   sortedRows.count: \(sortedRows.count)")
+        print("   coveredGlobalRows.count: \(coveredGlobalRows.count)")
+        print("   Remaining rows to process: \(sortedRows.count - currentArrayIndex)")
         print("📍 Coverage at start: \(coveredGlobalRows.count) rows covered")
         if !coveredGlobalRows.isEmpty {
             print("   Already covered: \(Array(coveredGlobalRows.sorted().prefix(10)).map { "#\($0)" }.joined(separator: ", "))\(coveredGlobalRows.count > 10 ? "..." : "")")
         }
 
-        for chunkIndex in 0..<totalChunks {
+        var currentChunk = 0
+
+        // Process until all rows are covered (dynamic batching)
+        while currentArrayIndex < sortedRows.count && coveredGlobalRows.count < sortedRows.count {
             // Check for pause
             if isPausedFlag {
                 session.isPaused = true
@@ -135,57 +139,31 @@ class DirectCategorizationService: ObservableObject {
                 return session
             }
 
-            // Skip already-covered rows
-            while currentArrayIndex < sortedRows.count {
-                if let globalRowStr = sortedRows[currentArrayIndex]["_globalRowNumber"],
-                   let globalRow = Int(globalRowStr),
-                   coveredGlobalRows.contains(globalRow) {
-                    print("  ⏭️ Skipping array index \(currentArrayIndex) (global row #\(globalRow) already covered)")
-                    currentArrayIndex += 1
-                } else {
-                    break
-                }
-            }
+            currentChunk += 1
 
-            // Check if we're done
-            if currentArrayIndex >= sortedRows.count {
-                print("✅ All rows processed!")
-                break
-            }
-
-            currentChunk = chunkIndex + 1
+            // Update totalChunks estimate for display (will grow as needed)
+            totalChunks = max(currentChunk, totalChunks)
             status = .processing(chunk: currentChunk, of: totalChunks)
             progress = Double(currentArrayIndex) / Double(sortedRows.count)
 
-            // Extract window, filtering out already-covered rows
-            var window: [[String: String]] = []
-            var windowArrayEnd = currentArrayIndex
-
-            while window.count < windowSize && windowArrayEnd < sortedRows.count {
-                let row = sortedRows[windowArrayEnd]
-                if let globalRowStr = row["_globalRowNumber"],
-                   let globalRow = Int(globalRowStr),
-                   !coveredGlobalRows.contains(globalRow) {
-                    window.append(row)
-                }
-                windowArrayEnd += 1
-            }
+            // WINDOWING: Always send next 30 rows from current position (lookahead)
+            // Don't filter - AI needs context to see upcoming rows
+            let windowEnd = min(currentArrayIndex + windowSize, sortedRows.count)
+            let window = Array(sortedRows[currentArrayIndex..<windowEnd])
 
             // Get actual row numbers for logging
             let windowGlobalRows = window.compactMap { row -> Int? in
                 guard let str = row["_globalRowNumber"] else { return nil }
                 return Int(str)
             }
-            let minGlobal = windowGlobalRows.min() ?? 0
-            let maxGlobal = windowGlobalRows.max() ?? 0
-            let windowDates = window.compactMap { $0["Run Date"] }.prefix(3)
+            let windowDates = window.compactMap { $0["Run Date"] }
 
-            currentStep = "Processing \(window.count) uncovered rows"
+            currentStep = "Processing window of \(window.count) rows"
             print("🔄 Batch \(currentChunk)/\(totalChunks):")
-            print("   Filtered window: \(window.count) UNCOVERED rows (scanned array \(currentArrayIndex)-\(windowArrayEnd-1))")
-            print("   Global rows: \(windowGlobalRows.prefix(10).map { "#\($0)" }.joined(separator: ", "))\(windowGlobalRows.count > 10 ? "..." : "")")
-            print("   Date range: \(windowDates.last ?? "latest") → \(windowDates.first ?? "earliest")")
-            print("   Total covered so far: \(coveredGlobalRows.count)/\(sortedRows.count)")
+            print("   Window: rows \(currentArrayIndex + 1)-\(windowEnd) of \(sortedRows.count)")
+            print("   Global row IDs: \(windowGlobalRows.prefix(10).map { "#\($0)" }.joined(separator: ", "))\(windowGlobalRows.count > 10 ? "..." : "")")
+            print("   Date range: \(windowDates.first ?? "?") → \(windowDates.last ?? "?")")
+            print("   Covered so far: \(coveredGlobalRows.count)/\(sortedRows.count) rows")
 
             // Build prompt with windowed context
             let prompt = buildWindowedPrompt(
@@ -216,7 +194,7 @@ class DirectCategorizationService: ObservableObject {
                     break  // Success!
 
                 } catch let error as ClaudeAPIError {
-                    if case .httpError(let statusCode, let body, _) = error, statusCode == 429 {
+                    if case .httpError(let statusCode, _, _) = error, statusCode == 429 {
                         // Rate limit - auto-retry after waiting
                         retryCount += 1
                         if retryCount > maxRetries {
@@ -243,9 +221,42 @@ class DirectCategorizationService: ObservableObject {
                         print("  ♻️ Retrying after rate limit wait...")
                         status = .processing(chunk: currentChunk, of: totalChunks)
                         continue  // Retry
+                    } else if case .httpError(let statusCode, let body, _) = error, statusCode == 400 {
+                        // Check for credit balance error
+                        if body.contains("credit balance is too low") {
+                            print("  ❌ Credit balance too low - pausing job")
+                            session.isPaused = true
+                            session.errorMessage = "Your Anthropic API credit balance is too low. Please add credits at https://console.anthropic.com/settings/plans and then resume this job."
+                            try modelContext.save()
+                            status = .failed("Credit balance too low. Please add credits and resume.")
+                            return session
+                        }
+                        // Other 400 error - pause with error details
+                        print("  ❌ API error - pausing job")
+                        session.isPaused = true
+                        session.errorMessage = "API Error: \(body)"
+                        try modelContext.save()
+                        status = .failed(body)
+                        return session
                     } else {
-                        throw error  // Other error, propagate
+                        // Other error - pause with details
+                        let errorDetails = error.localizedDescription
+                        print("  ❌ API error - pausing job: \(errorDetails)")
+                        session.isPaused = true
+                        session.errorMessage = errorDetails
+                        try modelContext.save()
+                        status = .failed(errorDetails)
+                        return session
                     }
+                } catch {
+                    // General error - pause with details
+                    let errorDetails = error.localizedDescription
+                    print("  ❌ Error - pausing job: \(errorDetails)")
+                    session.isPaused = true
+                    session.errorMessage = errorDetails
+                    try modelContext.save()
+                    status = .failed(errorDetails)
+                    return session
                 }
             }
 
@@ -265,8 +276,8 @@ class DirectCategorizationService: ObservableObject {
 
             let textContent = response.content.filter { $0.type == "text" }.compactMap(\.text).joined()
 
-            // Parse chunk transactions
-            let chunkTransactions = try parseTransactionsFromResponse(textContent, session: session, account: account, allowIncomplete: true)
+            // Parse chunk transactions (passing sortedRows, not csvRows which is the full unsorted set)
+            let chunkTransactions = try parseTransactionsFromResponse(textContent, session: session, account: account, csvRows: sortedRows, allowIncomplete: true)
 
             print("  ✅ Chunk \(currentChunk): Created \(chunkTransactions.count) transactions (\(response.usage.inputTokens) in, \(response.usage.outputTokens) out, \(String(format: "%.1f", duration))s)")
 
@@ -288,6 +299,19 @@ class DirectCategorizationService: ObservableObject {
                 print("  ⚠️ DUPLICATE ROWS! AI reused already-covered rows: \(alreadyCovered.map { "#\($0)" }.joined(separator: ", "))")
             }
 
+            // Filter out transactions that only use already-covered rows
+            let newTransactions = chunkTransactions.filter { transaction in
+                // Keep transaction if it uses ANY new (uncovered) rows
+                transaction.sourceRowNumbers.contains { rowNum in
+                    !coveredGlobalRows.contains(rowNum)
+                }
+            }
+
+            if newTransactions.count < chunkTransactions.count {
+                let skipped = chunkTransactions.count - newTransactions.count
+                print("  🚮 Skipping \(skipped) duplicate transactions (already covered rows)")
+            }
+
             // Check for out-of-window rows
             let outOfWindow = sourceRowsUsed.filter { !windowGlobalRows.contains($0) }
             if !outOfWindow.isEmpty {
@@ -301,42 +325,63 @@ class DirectCategorizationService: ObservableObject {
             let newlyCovered = afterCount - beforeCount
 
             print("  ✅ Coverage: \(beforeCount) → \(afterCount) rows (\(newlyCovered) new)")
+            print("  📝 Transactions: \(newTransactions.count) new (filtered from \(chunkTransactions.count) total)")
 
-            // Since we filtered the window, just advance by the number of rows in window
-            // that were actually used by the AI
-            let rowsConsumedFromWindow = window.filter { row in
+            // WINDOWING: Advance by number of rows consumed from START of window
+            // Find the highest array index that was consumed
+            var rowsConsumedFromWindow = 0
+            for (arrayOffset, row) in window.enumerated() {
                 guard let globalRowStr = row["_globalRowNumber"],
-                      let globalRow = Int(globalRowStr) else { return false }
-                return sourceRowsUsed.contains(globalRow)
-            }.count
+                      let globalRow = Int(globalRowStr) else { continue }
 
+                if sourceRowsUsed.contains(globalRow) {
+                    // This row was consumed - mark as furthest consumed position
+                    rowsConsumedFromWindow = max(rowsConsumedFromWindow, arrayOffset + 1)
+                }
+            }
+
+            print("     AI consumed \(rowsConsumedFromWindow) rows from window (leaving \(window.count - rowsConsumedFromWindow) for lookahead)")
             print("     Advancing array index by \(rowsConsumedFromWindow) positions (from \(currentArrayIndex) → \(currentArrayIndex + rowsConsumedFromWindow))")
 
-            // Create batch record
-            let batch = CategorizationBatch(
-                batchNumber: currentChunk,
-                startRow: minRowInBatch,
-                endRow: maxRowInBatch,
-                windowSize: window.count,
-                session: session
-            )
-            batch.addTransactions(
-                chunkTransactions,
-                tokens: (response.usage.inputTokens, response.usage.outputTokens),
-                duration: duration,
-                response: textContent.data(using: String.Encoding.utf8),
-                request: prompt.data(using: String.Encoding.utf8)
-            )
+            // Only create batch and update if we have new transactions
+            if !newTransactions.isEmpty {
+                // Create batch record
+                let batch = CategorizationBatch(
+                    batchNumber: currentChunk,
+                    startRow: minRowInBatch,
+                    endRow: maxRowInBatch,
+                    windowSize: window.count,
+                    session: session
+                )
+                batch.addTransactions(
+                    newTransactions,  // Only add non-duplicate transactions
+                    tokens: (response.usage.inputTokens, response.usage.outputTokens),
+                    duration: duration,
+                    response: textContent.data(using: String.Encoding.utf8),
+                    request: prompt.data(using: String.Encoding.utf8)
+                )
 
-            print("  📦 Creating batch #\(currentChunk): global rows #\(minRowInBatch)-#\(maxRowInBatch)")
-            modelContext.insert(batch)
+                print("  📦 Creating batch #\(currentChunk): global rows #\(minRowInBatch)-#\(maxRowInBatch)")
+                modelContext.insert(batch)
+
+                // Add new transactions to session
+                session.transactions.append(contentsOf: newTransactions)
+                processedTransactionCount += newTransactions.count
+                session.updateStatistics()
+
+                // Calculate balances continuously after adding transactions
+                print("  💰 Updating running balances after batch...")
+                let balanceSample = session.transactions.last?.calculatedBalance
+                calculateRunningBalances(for: session)
+                print("     Latest transaction balance: \(balanceSample?.description ?? "nil") → \(session.transactions.last?.calculatedBalance?.description ?? "nil")")
+            } else {
+                print("  ⏭️  Skipping batch #\(currentChunk) - all transactions are duplicates")
+            }
 
             // Update state - CRITICAL: Use array index, not global row number!
+            // Always advance the window, even if all transactions were duplicates
             currentArrayIndex += rowsConsumedFromWindow
             session.processedRowsCount = currentArrayIndex  // Array position for resume
-            session.transactions.append(contentsOf: chunkTransactions)
-            processedTransactionCount += chunkTransactions.count
-            session.updateStatistics()
 
             print("  📍 Advanced to array index \(currentArrayIndex), covered \(coveredGlobalRows.count) global rows total")
 
@@ -350,6 +395,12 @@ class DirectCategorizationService: ObservableObject {
             print("     Session has: \(session.transactionCount) transactions total")
             print("")
 
+            // Check if all rows are covered
+            if coveredGlobalRows.count >= sortedRows.count {
+                print("✅ All rows covered - terminating early")
+                break
+            }
+
             // If we didn't make progress, stop
             if rowsConsumedFromWindow == 0 {
                 print("⚠️ No progress made (advanced 0 positions), stopping to prevent infinite loop")
@@ -362,6 +413,56 @@ class DirectCategorizationService: ObservableObject {
         print("Missing rows: \(sortedRows.count - coveredGlobalRows.count)")
         print("═══════════════════════════════════════")
 
+        // Gap filling - process any uncovered rows
+        if coveredGlobalRows.count < sortedRows.count {
+            print("\n🔍 Detecting gaps in coverage...")
+
+            let uncoveredRowNumbers = session.findUncoveredRows()
+            print("   Found \(uncoveredRowNumbers.count) uncovered rows: \(uncoveredRowNumbers.prefix(20).map { "#\($0)" }.joined(separator: ", "))\(uncoveredRowNumbers.count > 20 ? "..." : "")")
+
+            if !uncoveredRowNumbers.isEmpty {
+                print("\n🔄 Starting gap-filling review...")
+
+                // Create review service
+                let reviewService = TransactionReviewService(modelContext: modelContext)
+
+                do {
+                    // Review uncovered rows
+                    let reviewSession = try await reviewService.reviewUncoveredRows(
+                        session: session,
+                        csvRows: csvRows,
+                        uncoveredRowNumbers: uncoveredRowNumbers
+                    )
+
+                    print("\n📊 Review complete:")
+                    print("   Deltas generated: \(reviewSession.deltas.count)")
+
+                    // Apply deltas
+                    if !reviewSession.deltas.isEmpty {
+                        try reviewService.applyDeltas(from: reviewSession, to: session)
+
+                        print("\n✅ Gap filling complete:")
+                        print("   Created: \(reviewSession.transactionsCreated) transactions")
+                        print("   Updated: \(reviewSession.transactionsUpdated) transactions")
+                        print("   Deleted: \(reviewSession.transactionsDeleted) transactions")
+
+                        // Recompute coverage
+                        let finalCoverage = session.buildCoverageIndex().count
+                        print("   Final coverage: \(finalCoverage)/\(sortedRows.count) rows")
+                    } else {
+                        print("   ⚠️ No deltas generated - AI couldn't create transactions for uncovered rows")
+                    }
+                } catch {
+                    print("   ⚠️ Gap filling failed: \(error.localizedDescription)")
+                    print("   Continuing with partial coverage...")
+                }
+            }
+        }
+
+        // Final balance calculation (already done per batch, but do one more for completeness)
+        print("💰 Final balance calculation...")
+        calculateRunningBalances(for: session)
+
         // Mark complete
         session.isComplete = true
         session.processedRowsCount = csvRows.count
@@ -372,6 +473,159 @@ class DirectCategorizationService: ObservableObject {
         currentStep = "✓ Created \(session.transactionCount) transactions"
 
         return session
+    }
+
+    // MARK: - Balance Calculation
+
+    /// Public method to recalculate balances for an existing session
+    func recalculateBalances(
+        for session: CategorizationSession,
+        csvRows: [[String: String]]
+    ) {
+        print("\n🔄 Recalculating balances for session v\(session.versionNumber)...")
+
+        // First, extract CSV balances for all transactions
+        extractCSVBalances(for: session, csvRows: csvRows)
+
+        // Then calculate running balances
+        calculateRunningBalances(for: session)
+
+        print("✅ Balance recalculation complete\n")
+    }
+
+    private func extractCSVBalances(for session: CategorizationSession, csvRows: [[String: String]]) {
+        print("📊 Extracting CSV balances from source rows...")
+        print("   Total CSV rows available: \(csvRows.count)")
+        print("   Total transactions: \(session.transactions.count)")
+
+        var extracted = 0
+        var rowsWithBalance = 0
+        var rowsWithoutBalance = 0
+
+        // Check what headers exist
+        if let firstRow = csvRows.first {
+            print("   CSV Headers: \(firstRow.keys.joined(separator: ", "))")
+            let balanceField = firstRow["Cash Balance ($)"] ?? firstRow["Balance"] ?? firstRow["Cash Balance"]
+            if let balanceField = balanceField {
+                print("   ✓ Balance field exists (sample: '\(balanceField)')")
+            } else {
+                print("   ❌ Balance field NOT found in CSV headers")
+            }
+        }
+
+        for (index, transaction) in session.transactions.enumerated() {
+            // Find the last source row (usually the settlement row with balance)
+            guard let lastRowNum = transaction.sourceRowNumbers.max(),
+                  lastRowNum > 0 else {
+                if index < 3 {
+                    print("   Txn #\(index): No valid source rows (rows: \(transaction.sourceRowNumbers))")
+                }
+                continue
+            }
+
+            // Find CSV row by global row number (not array index!)
+            guard let csvRow = csvRows.first(where: { row in
+                guard let globalRowStr = row["_globalRowNumber"],
+                      let globalRow = Int(globalRowStr) else {
+                    return false
+                }
+                return globalRow == lastRowNum
+            }) else {
+                if index < 3 {
+                    print("   Txn #\(index): Could not find CSV row #\(lastRowNum)")
+                }
+                continue
+            }
+
+            // Extract balance field (try multiple possible names)
+            let balanceStr = csvRow["Cash Balance ($)"] ?? csvRow["Balance"] ?? csvRow["Cash Balance"]
+
+            if let balanceStr = balanceStr, !balanceStr.isEmpty {
+                rowsWithBalance += 1
+
+                // Parse balance (remove $ and commas)
+                let cleaned = balanceStr
+                    .replacingOccurrences(of: "$", with: "")
+                    .replacingOccurrences(of: ",", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+
+                if let csvBalance = Decimal(string: cleaned) {
+                    transaction.csvBalance = csvBalance
+                    extracted += 1
+
+                    if index < 3 {
+                        print("   Txn #\(index) (\(transaction.transactionDescription)): CSV Balance = $\(csvBalance)")
+                    }
+                } else {
+                    if index < 3 {
+                        print("   Txn #\(index): Failed to parse balance '\(balanceStr)' → '\(cleaned)'")
+                    }
+                }
+            } else {
+                rowsWithoutBalance += 1
+                if index < 3 {
+                    print("   Txn #\(index) (row \(lastRowNum)): No balance field (Balance = '\(csvRow["Balance"] ?? "nil")')")
+                }
+            }
+        }
+
+        print("✓ Extracted CSV balance for \(extracted)/\(session.transactions.count) transactions")
+        print("   CSV rows with Balance field: \(rowsWithBalance)")
+        print("   CSV rows without Balance field: \(rowsWithoutBalance)")
+    }
+
+    private func calculateRunningBalances(for session: CategorizationSession) {
+        // Sort transactions chronologically (oldest first)
+        // Fidelity CSV is reverse chronological, so higher row numbers = older
+        let sortedTransactions = session.transactions.sorted { t1, t2 in
+            let minRow1 = t1.sourceRowNumbers.min() ?? 0
+            let minRow2 = t2.sourceRowNumbers.min() ?? 0
+            return minRow1 > minRow2  // Higher row = older = process first
+        }
+
+        print("💰 Calculating running balances for \(sortedTransactions.count) transactions in CHRONOLOGICAL ORDER (oldest first)...")
+
+        var runningBalance: Decimal = 0
+        var transactionsWithCSVBalance = 0
+        var transactionsWithDiscrepancies = 0
+
+        for (index, transaction) in sortedTransactions.enumerated() {
+            // Calculate net cash impact
+            let cashImpact = transaction.netCashImpact
+
+            // Update running balance
+            runningBalance += cashImpact
+
+            // Store calculated balance
+            transaction.calculatedBalance = runningBalance
+
+            // Calculate discrepancy if CSV balance exists
+            if let csvBalance = transaction.csvBalance {
+                transactionsWithCSVBalance += 1
+                transaction.balanceDiscrepancy = csvBalance - runningBalance
+
+                if abs(transaction.balanceDiscrepancy ?? 0) > 0.01 {
+                    transactionsWithDiscrepancies += 1
+                }
+            }
+
+            // Debug first few and last few
+            if index < 3 || index >= sortedTransactions.count - 3 {
+                print("  Txn #\(index): \(transaction.transactionDescription)")
+                print("    Cash impact: \(cashImpact)")
+                print("    Running balance: \(runningBalance)")
+                print("    CSV balance: \(transaction.csvBalance?.description ?? "none")")
+                if let discrepancy = transaction.balanceDiscrepancy {
+                    print("    Discrepancy: \(discrepancy)")
+                }
+            }
+        }
+
+        print("✓ Calculated running balances:")
+        print("  Total transactions: \(sortedTransactions.count)")
+        print("  With CSV balance: \(transactionsWithCSVBalance)")
+        print("  With discrepancies: \(transactionsWithDiscrepancies)")
+        print("  Final balance: \(runningBalance)")
     }
 
     // MARK: - Prompt Building
@@ -442,19 +696,29 @@ class DirectCategorizationService: ObservableObject {
                   "amount": 283.06,
                   "quantity": 283.06,
                   "quantityUnit": "shares",
-                  "assetSymbol": "SPAXX"
+                  "assetSymbol": "SPAXX",
+                  "sourceRows": [0],
+                  "csvAmount": 283.06
                 },
                 {
                   "type": "credit",
                   "accountType": "income",
                   "accountName": "Dividend Income",
-                  "amount": 283.06
+                  "amount": 283.06,
+                  "sourceRows": [0],
+                  "csvAmount": 283.06
                 }
               ]
             }
           ]
         }
         ```
+
+        CRITICAL: Each journal entry MUST specify:
+        - sourceRows: Array of global row numbers this entry came from
+        - csvAmount: The expected amount from the CSV for validation
+
+        This enables full data lineage and amount validation.
 
         Analyze all rows and group/categorize them correctly.
         """
@@ -492,25 +756,58 @@ class DirectCategorizationService: ObservableObject {
         let csvString = csvLines.joined(separator: "\n")
         let isFirstBatch = alreadyProcessedTransactions == 0
 
-        // Get the actual global row number from first row in window
-        let actualStartRow = window.first?["_globalRowNumber"] ?? "\(windowStartRow)"
+        // Detect year range from window dates
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MM/dd/yyyy"
+        let windowDates = window.compactMap { row -> Date? in
+            guard let dateStr = row["Run Date"] else { return nil }
+            return dateFormatter.date(from: dateStr)
+        }
+        let yearRange: String
+        if let oldestDate = windowDates.min(), let newestDate = windowDates.max() {
+            let calendar = Calendar.current
+            let oldestYear = calendar.component(.year, from: oldestDate)
+            let newestYear = calendar.component(.year, from: newestDate)
+            if oldestYear == newestYear {
+                yearRange = "\(oldestYear)"
+            } else {
+                yearRange = "\(oldestYear)-\(newestYear)"
+            }
+        } else {
+            yearRange = "2024-2025"
+        }
 
         return """
-        I'm showing you \(window.count) UNCOVERED rows from Fidelity CSV data.
+        I'm showing you a WINDOW of \(window.count) rows from Fidelity CSV data.
 
-        These rows are sorted LATEST to EARLIEST (most recent first).
-        These are the ONLY uncovered rows - all other rows already have transactions.
-        Process these \(window.count) rows sequentially from top to bottom.
+        These rows are sorted OLDEST to NEWEST (chronological order).
+        This is a sliding window - you can see the next \(window.count) rows ahead.
+        Process rows sequentially from top to bottom.
 
-        \(isFirstBatch ? "Generate the FIRST \(requestedCount) transactions from these rows." : "You already generated \(alreadyProcessedTransactions) transactions. Generate the NEXT \(requestedCount) transactions from the top of this list.")
+        \(isFirstBatch ? "Generate the FIRST \(requestedCount) transactions from the start of this window." : "You already generated \(alreadyProcessedTransactions) transactions. Generate the NEXT \(requestedCount) transactions from the start of this window.")
 
-        CRITICAL:
+        WINDOWING INSTRUCTIONS:
+        - You're seeing a \(window.count)-row lookahead window
+        - Generate up to \(requestedCount) transactions from the TOP of this window
+        - You don't need to use ALL rows in the window - leave some as lookahead
         - Use "_globalRowNumber" for sourceRows arrays
-        - Process rows IN ORDER (top to bottom)
-        - All rows shown are UNCOVERED - you won't see already-categorized rows
+        - Process rows IN ORDER (top to bottom, oldest to newest)
 
         Account: \(account.name)
         Institution: Fidelity Investments
+
+        \(account.categorizationContext != nil ? """
+        CATEGORIZATION CONTEXT FOR THIS ACCOUNT:
+        \(account.categorizationContext!)
+
+        IMPORTANT: Follow these account-specific patterns when categorizing.
+        """ : "")
+
+        YEAR CONTEXT:
+        - These transactions span the year(s): \(yearRange)
+        - When you see dates in MM/dd/yyyy format, the year is already specified
+        - Return dates in yyyy-MM-dd format, using the EXACT year from the CSV
+        - Example: CSV "01/02/2025" should become "2025-01-02" (not 2024-01-02)
 
         IMPORTANT INSTRUCTIONS:
         1. Use the "_globalRowNumber" field in each row for sourceRows arrays
@@ -538,19 +835,21 @@ class DirectCategorizationService: ObservableObject {
            - expense: Fees, Commissions, Cash Withdrawals, Payments
            - equity: Owner Contributions, Owner Withdrawals
 
-        5. Important: Return ONLY the \(requestedCount) transactions requested
-           - Process rows chronologically (earliest dates first)
+        5. Windowing approach:
+           - Generate up to \(requestedCount) transactions from the TOP of the window
+           - Process rows in order (oldest to newest)
+           - You can leave rows unconsumed at the end of the window (lookahead buffer)
            - Use "_globalRowNumber" values for sourceRows arrays
-           - Stop after \(requestedCount) transactions even if more rows remain
+           - Don't jump ahead - process sequentially from the start
 
-        CSV Data (\(window.count) rows, chronologically sorted):
+        CSV Data (\(window.count)-row window, oldest to newest):
         ```csv
         \(csvString)
         ```
 
         Return JSON with up to \(requestedCount) transactions.
         Use "_globalRowNumber" for sourceRows arrays (preserves source file provenance).
-        Continue from where you left off chronologically.
+        Process from the TOP of this window sequentially.
         """
     }
 
@@ -560,6 +859,7 @@ class DirectCategorizationService: ObservableObject {
         _ response: String,
         session: CategorizationSession,
         account: Account,
+        csvRows: [[String: String]] = [],
         allowIncomplete: Bool = false
     ) throws -> [Transaction] {
         print("📝 Parsing AI response (\(response.count) chars)")
@@ -655,6 +955,83 @@ class DirectCategorizationService: ObservableObject {
             transaction.sourceRowNumbers = sourceRows
             transaction.categorizationSession = session
 
+            // Extract balance from CSV rows if available
+            if !csvRows.isEmpty {
+                // Find the chronologically last source row (not just max row number!)
+                // The csvRows array is sorted chronologically, so we need the last occurrence
+                let rowPositions = sourceRows.compactMap { rowNum -> (rowNumber: Int, arrayIndex: Int)? in
+                    // Find the position of this row in the sorted CSV array
+                    if let arrayIndex = csvRows.firstIndex(where: { row in
+                        guard let globalRowStr = row["_globalRowNumber"],
+                              let globalRow = Int(globalRowStr) else { return false }
+                        return globalRow == rowNum
+                    }) {
+                        return (rowNum, arrayIndex)
+                    }
+                    return nil
+                }
+
+                // Get chronologically last row (highest array index)
+                let chronologicallyLastRow = rowPositions.max(by: { $0.arrayIndex < $1.arrayIndex })
+                let lastRowNum = chronologicallyLastRow?.rowNumber
+
+                if let lastRowNum = lastRowNum, lastRowNum > 0 {
+                    if index < 3 {
+                        print("  🔍 Transaction #\(index): Looking for CSV balance in row #\(lastRowNum) (chronologically last)")
+                        print("     Source rows: \(sourceRows.sorted()) -> chronologically last: #\(lastRowNum)")
+                        print("     Row positions in sorted array: \(rowPositions.map { "row #\($0.rowNumber) at index \($0.arrayIndex)" }.joined(separator: ", "))")
+                        print("     CSV rows available: \(csvRows.count)")
+                        print("     First CSV row has _globalRowNumber: \(csvRows.first?["_globalRowNumber"] ?? "nil")")
+                    }
+
+                    // Find CSV row by global row number (not array index!)
+                    if let csvRow = csvRows.first(where: { row in
+                        guard let globalRowStr = row["_globalRowNumber"],
+                              let globalRow = Int(globalRowStr) else {
+                            return false
+                        }
+                        return globalRow == lastRowNum
+                    }) {
+                        if index < 3 {
+                            print("     Found CSV row #\(lastRowNum)")
+                            print("     CSV row has \(csvRow.keys.count) fields: \(csvRow.keys.sorted().joined(separator: ", "))")
+                            print("     Balance field value: '\(csvRow["Balance"] ?? "nil")'")
+
+                            // Check if balance is under a different name
+                            for (key, value) in csvRow where !value.isEmpty && (key.lowercased().contains("balance") || value.contains("$")) {
+                                print("     Possible balance field: \(key) = '\(value)'")
+                            }
+                        }
+
+                        // Extract balance field (try multiple possible names)
+                        let balanceStr = csvRow["Cash Balance ($)"] ?? csvRow["Balance"] ?? csvRow["Cash Balance"]
+
+                        if let balanceStr = balanceStr, !balanceStr.isEmpty {
+                            // Parse balance (remove $ and commas)
+                            let cleaned = balanceStr
+                                .replacingOccurrences(of: "$", with: "")
+                                .replacingOccurrences(of: ",", with: "")
+                                .trimmingCharacters(in: .whitespaces)
+
+                            if let csvBalance = Decimal(string: cleaned) {
+                                transaction.csvBalance = csvBalance
+                                print("  ✓ Transaction #\(index): CSV Balance extracted = $\(csvBalance) (from row #\(lastRowNum))")
+                            } else if index < 3 {
+                                print("     Failed to parse '\(cleaned)' as Decimal")
+                            }
+                        } else if index < 3 {
+                            print("     Balance field is empty or nil")
+                        }
+                    } else if index < 3 {
+                        print("     ❌ Could not find CSV row #\(lastRowNum) in csvRows")
+                    }
+                } else if index < 3 {
+                    print("  ⚠️ Transaction #\(index): No valid source rows (sourceRows: \(sourceRows))")
+                }
+            } else if index < 3 {
+                print("  ⚠️ Transaction #\(index): csvRows is empty!")
+            }
+
             print("  ✓ Transaction #\(index): \(description) with \(entriesArray.count) entries")
 
             // Parse journal entries
@@ -672,6 +1049,10 @@ class DirectCategorizationService: ObservableObject {
                 let quantityUnit = entryDict["quantityUnit"] as? String
                 let assetSymbol = entryDict["assetSymbol"] as? String
 
+                // Extract source provenance (new)
+                let entrySourceRows = (entryDict["sourceRows"] as? [Int]) ?? sourceRows
+                let entryCsvAmount = (entryDict["csvAmount"] as? Double).map { Decimal($0) }
+
                 // Create entry
                 let entry = JournalEntry(
                     accountType: AccountType(rawValue: accountTypeStr) ?? .expense,
@@ -683,6 +1064,15 @@ class DirectCategorizationService: ObservableObject {
                     transaction: transaction
                 )
 
+                // Set CSV amount for validation
+                entry.csvAmount = entryCsvAmount
+                entry.calculateAmountDiscrepancy()
+
+                // Link to SourceRows
+                let sourceRowService = SourceRowService(modelContext: modelContext)
+                let linkedSourceRows = sourceRowService.getSourceRows(globalRowNumbers: entrySourceRows)
+                entry.sourceRows = linkedSourceRows
+
                 // Link to asset if specified
                 if let symbol = assetSymbol {
                     entry.asset = AssetRegistry.shared.findOrCreate(symbol: symbol)
@@ -691,7 +1081,22 @@ class DirectCategorizationService: ObservableObject {
                 transaction.journalEntries.append(entry)
             }
 
+            // Validate amount discrepancies and detect over-grouping
             if transaction.journalEntries.count >= 2 {
+                var hasDiscrepancies = false
+                for entry in transaction.journalEntries {
+                    if entry.hasAmountDiscrepancy {
+                        hasDiscrepancies = true
+                        print("  ⚠️ AMOUNT MISMATCH: Entry \(entry.accountName) has discrepancy of \(entry.amountDiscrepancy!)")
+                        print("     Expected (CSV): \(entry.csvAmount!) | Actual: \(entry.amount)")
+                        print("     This may indicate over-grouping or incorrect row linkage")
+                    }
+                }
+
+                if hasDiscrepancies {
+                    print("  🚨 Transaction #\(index) has amount validation errors - may be over-grouped!")
+                }
+
                 transactions.append(transaction)
                 print("  ✅ Transaction #\(index) parsed successfully (\(transaction.journalEntries.count) entries)")
             } else {

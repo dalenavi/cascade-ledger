@@ -28,7 +28,7 @@ struct PortfolioValueView: View {
             } else {
                 ContentUnavailableView(
                     "No Account Selected",
-                    systemImage: "dollarsign.chart.fill",
+                    systemImage: "chart.line.uptrend.xyaxis",
                     description: Text("Select an account to view portfolio value")
                 )
             }
@@ -160,62 +160,105 @@ struct PortfolioValueContent: View {
         print("\n=== Portfolio Value Calculation ===")
         let dateRange = timeRange.dateRange
 
-        // Calculate current value per asset
-        var summaries: [String: AssetValueSummary] = [:]
-
-        // Track USD separately (all transactions without assetId)
+        // Calculate current holdings by analyzing journal entries
+        var assetHoldings: [String: Decimal] = [:]  // assetName -> quantity
+        var assetCostBasis: [String: Decimal] = [:]  // assetName -> cost basis
+        var assetUnits: [String: String] = [:]       // assetName -> unit type
         var usdBalance: Decimal = 0
-        var usdTransactionCount = 0
-        print("\nUSD Transaction Analysis:")
+        var journalEntryCount = 0
 
-        for entry in allEntries {
-            if let assetId = entry.assetId?.trimmingCharacters(in: .whitespaces),
-               !assetId.isEmpty,
-               let qty = entry.quantity,
-               qty != 0 {
-                // Asset-based transaction
-                if summaries[assetId] == nil {
-                    summaries[assetId] = AssetValueSummary(
-                        assetId: assetId,
-                        currentQuantity: 0,
-                        unit: entry.quantityUnit ?? "units",
-                        costBasis: 0,
-                        currentPrice: 0,
-                        marketValue: 0
-                    )
-                }
+        print("\nAnalyzing journal entries from \(allEntries.count) transactions...")
 
-                if qty > 0 {
-                    summaries[assetId]?.currentQuantity += qty
-                    summaries[assetId]?.costBasis += abs(entry.amount)
-                } else if qty < 0 {
-                    summaries[assetId]?.currentQuantity += qty
-                    summaries[assetId]?.costBasis -= abs(entry.amount)
-                }
-            } else {
-                // USD cash transaction (no assetId)
-                usdBalance += entry.amount
-                usdTransactionCount += 1
+        for transaction in allEntries {
+            for entry in transaction.journalEntries {
+                journalEntryCount += 1
 
-                if usdTransactionCount <= 10 {  // Log first 10
-                    print("  \(entry.date.formatted(date: .abbreviated, time: .omitted)): \(entry.transactionDescription.prefix(40)) → \(entry.amount) (running: \(usdBalance))")
+                let debit = entry.debitAmount ?? 0
+                let credit = entry.creditAmount ?? 0
+
+                switch entry.accountType {
+                case .cash:
+                    // Cash: Debit increases, Credit decreases
+                    if entry.accountName == "Cash USD" {
+                        usdBalance += debit - credit
+                        if journalEntryCount <= 20 {
+                            print("  Cash: \(transaction.date.formatted(date: .abbreviated, time: .omitted)) \(transaction.transactionDescription.prefix(30)) DR:\(debit) CR:\(credit) → balance:\(usdBalance)")
+                        }
+                    }
+
+                case .asset:
+                    // Asset: Debit increases, Credit decreases
+                    let assetName = entry.accountName
+                    let quantity = entry.quantity ?? 0
+
+                    if debit > 0 {
+                        // Buying - increase quantity and cost basis
+                        assetHoldings[assetName, default: 0] += quantity
+                        assetCostBasis[assetName, default: 0] += debit
+                        assetUnits[assetName] = entry.quantityUnit ?? "shares"
+
+                        if journalEntryCount <= 20 {
+                            print("  Buy \(assetName): +\(quantity) @ \(debit) → holding:\(assetHoldings[assetName] ?? 0)")
+                        }
+                    } else if credit > 0 {
+                        // Selling - decrease quantity and cost basis (proportionally)
+                        let currentQty = assetHoldings[assetName, default: 0]
+                        let currentCost = assetCostBasis[assetName, default: 0]
+
+                        assetHoldings[assetName, default: 0] -= quantity
+
+                        // Reduce cost basis proportionally to quantity sold
+                        if currentQty > 0 {
+                            let costReduction = (quantity / currentQty) * currentCost
+                            assetCostBasis[assetName, default: 0] -= costReduction
+                        }
+
+                        if journalEntryCount <= 20 {
+                            print("  Sell \(assetName): -\(quantity) @ \(credit) → holding:\(assetHoldings[assetName] ?? 0)")
+                        }
+                    }
+
+                case .equity, .income, .expense, .liability:
+                    // These don't affect holdings
+                    break
                 }
             }
         }
 
-        print("\nTotal USD transactions: \(usdTransactionCount)")
+        print("\nJournal entries analyzed: \(journalEntryCount)")
         print("Final USD balance: \(usdBalance)")
+        print("\nAsset Holdings:")
+        for (asset, qty) in assetHoldings.sorted(by: { $0.key < $1.key }) {
+            print("  \(asset): \(qty) \(assetUnits[asset] ?? "units")")
+        }
 
-        // Add USD as a summary
-        if usdBalance != 0 {
-            print("Adding USD to summaries: \(usdBalance)")
+        // Build summaries
+        var summaries: [String: AssetValueSummary] = [:]
+
+        // Add USD
+        if abs(usdBalance) > 0.01 {
             summaries["USD"] = AssetValueSummary(
                 assetId: "USD",
-                currentQuantity: usdBalance,  // For USD, quantity = balance
+                currentQuantity: usdBalance,
                 unit: "USD",
-                costBasis: usdBalance,
+                costBasis: usdBalance,  // For cash, cost basis = market value
                 currentPrice: 1.0,
                 marketValue: usdBalance
+            )
+        }
+
+        // Add assets
+        for (assetName, quantity) in assetHoldings {
+            // Only show if we have a non-trivial position
+            guard abs(quantity) > 0.0001 else { continue }
+
+            summaries[assetName] = AssetValueSummary(
+                assetId: assetName,
+                currentQuantity: quantity,
+                unit: assetUnits[assetName] ?? "shares",
+                costBasis: assetCostBasis[assetName] ?? 0,
+                currentPrice: 0,
+                marketValue: 0
             )
         }
 
@@ -258,11 +301,13 @@ struct PortfolioValueContent: View {
                 // USD uses different calculation (cash balance, not quantity-based)
                 points.append(contentsOf: calculateUSDValueOverTime())
             } else {
-                let entries = allEntries.filter { entry in
-                    entry.assetId == assetId &&
-                    entry.quantity != nil &&
-                    entry.date >= timeRange.dateRange.start &&
-                    entry.date <= timeRange.dateRange.end
+                // Filter transactions that have journal entries for this asset
+                let entries = allEntries.filter { transaction in
+                    transaction.date >= timeRange.dateRange.start &&
+                    transaction.date <= timeRange.dateRange.end &&
+                    transaction.journalEntries.contains { entry in
+                        entry.accountType == .asset && entry.accountName == assetId
+                    }
                 }
 
                 points.append(contentsOf: calculateMarketValueOverTime(entries, assetId: assetId))
@@ -277,31 +322,46 @@ struct PortfolioValueContent: View {
         let calendar = Calendar.current
         let dateRange = timeRange.dateRange
 
-        // Get all cash transactions (no assetId)
-        let cashEntries = allEntries.filter { entry in
-            (entry.assetId == nil || entry.assetId?.trimmingCharacters(in: .whitespaces).isEmpty == true) &&
-            entry.date >= dateRange.start &&
-            entry.date <= dateRange.end
-        }.sorted { $0.date < $1.date }
+        // Collect all cash journal entries sorted by date
+        var cashJournalEntries: [(date: Date, debit: Decimal, credit: Decimal, description: String)] = []
 
-        print("Found \(cashEntries.count) USD transactions in date range")
+        for transaction in allEntries {
+            for entry in transaction.journalEntries {
+                if entry.accountType == .cash && entry.accountName == "Cash USD" {
+                    let debit = entry.debitAmount ?? 0
+                    let credit = entry.creditAmount ?? 0
+                    if debit > 0 || credit > 0 {
+                        cashJournalEntries.append((
+                            date: transaction.date,
+                            debit: debit,
+                            credit: credit,
+                            description: transaction.transactionDescription
+                        ))
+                    }
+                }
+            }
+        }
+
+        cashJournalEntries.sort { $0.date < $1.date }
+
+        print("Found \(cashJournalEntries.count) cash journal entries")
 
         var cumulativeBalance: Decimal = 0
         var points: [MarketValuePoint] = []
 
-        // Start with balance from before date range
-        let priorEntries = allEntries.filter { entry in
-            (entry.assetId == nil || entry.assetId?.trimmingCharacters(in: .whitespaces).isEmpty == true) &&
-            entry.date < dateRange.start
+        // Calculate starting balance (all entries before date range)
+        let priorEntries = cashJournalEntries.filter { $0.date < dateRange.start }
+        for entry in priorEntries {
+            cumulativeBalance += entry.debit - entry.credit
         }
-        let startingBalance = priorEntries.reduce(0) { $0 + $1.amount }
-        cumulativeBalance = startingBalance
+        print("Starting USD balance (before range): \(cumulativeBalance)")
 
-        print("Starting USD balance (before range): \(startingBalance)")
+        // Get entries in range
+        let entriesInRange = cashJournalEntries.filter { $0.date >= dateRange.start && $0.date <= dateRange.end }
 
         // Add starting point
-        if !cashEntries.isEmpty {
-            let dayBefore = calendar.date(byAdding: .day, value: -1, to: cashEntries.first!.date)!
+        if !entriesInRange.isEmpty {
+            let dayBefore = calendar.date(byAdding: .day, value: -1, to: entriesInRange.first!.date)!
             points.append(MarketValuePoint(
                 date: dayBefore,
                 assetId: "USD",
@@ -313,8 +373,8 @@ struct PortfolioValueContent: View {
         }
 
         // Track balance changes
-        for (index, entry) in cashEntries.enumerated() {
-            cumulativeBalance += entry.amount
+        for (index, entry) in entriesInRange.enumerated() {
+            cumulativeBalance += entry.debit - entry.credit
 
             let periodStart = granularity.periodStart(for: entry.date, calendar: calendar)
 
@@ -327,7 +387,7 @@ struct PortfolioValueContent: View {
             ))
 
             if index < 10 {  // Log first 10
-                print("  \(entry.date.formatted(date: .abbreviated, time: .omitted)): \(entry.transactionDescription.prefix(30)) \(entry.amount) → balance: \(cumulativeBalance)")
+                print("  \(entry.date.formatted(date: .abbreviated, time: .omitted)): \(entry.description.prefix(30)) DR:\(entry.debit) CR:\(entry.credit) → balance: \(cumulativeBalance)")
             }
         }
 
@@ -342,15 +402,28 @@ struct PortfolioValueContent: View {
         let calendar = Calendar.current
         let dateRange = timeRange.dateRange
 
-        // Build position timeline from transactions
+        // Build position timeline from journal entries
         var positionTimeline: [(Date, Decimal)] = []  // (date, quantity held)
         var cumulativeQty: Decimal = 0
 
-        for entry in entries.sorted(by: { $0.date < $1.date }) {
-            guard let qty = entry.quantity, qty != 0 else { continue }
+        for transaction in entries.sorted(by: { $0.date < $1.date }) {
+            for entry in transaction.journalEntries {
+                if entry.accountType == .asset && entry.accountName == assetId {
+                    let qty = entry.quantity ?? 0
 
-            cumulativeQty += qty
-            positionTimeline.append((entry.date, cumulativeQty))
+                    if entry.debitAmount != nil {
+                        // Debit increases asset
+                        cumulativeQty += qty
+                    } else if entry.creditAmount != nil {
+                        // Credit decreases asset
+                        cumulativeQty -= qty
+                    }
+
+                    if qty != 0 {
+                        positionTimeline.append((transaction.date, cumulativeQty))
+                    }
+                }
+            }
         }
 
         guard !positionTimeline.isEmpty else { return [] }
@@ -618,7 +691,7 @@ struct MarketValueChartView: View {
 
             if valueData.isEmpty {
                 VStack(spacing: 20) {
-                    Image(systemName: "dollarsign.chart.fill")
+                    Image(systemName: "chart.line.uptrend.xyaxis")
                         .font(.system(size: 60))
                         .foregroundColor(.secondary)
                     Text("No price data available")

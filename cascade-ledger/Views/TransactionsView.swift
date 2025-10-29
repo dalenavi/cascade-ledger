@@ -586,6 +586,38 @@ struct TransactionRowWithCategorization: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+
+                    // Balance information (always show)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Balance")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                        if let calcBalance = entry.calculatedBalance {
+                            Text(calcBalance, format: .currency(code: "USD"))
+                                .font(.caption)
+                                .foregroundColor(entry.hasBalanceDiscrepancy ? .red : .secondary)
+                        } else {
+                            Text("—")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if entry.hasBalanceDiscrepancy {
+                            HStack(spacing: 2) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption2)
+                                Text("Off")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.red)
+                        } else if entry.csvBalance != nil {
+                            Text("✓")
+                                .font(.caption2)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    .frame(minWidth: 90)
                 }
             }
             .buttonStyle(.plain)

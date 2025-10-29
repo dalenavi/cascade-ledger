@@ -25,11 +25,16 @@ struct cascade_ledgerApp: App {
             // Double-entry models
             Transaction.self,
             JournalEntry.self,
+            // Source provenance
+            SourceRow.self,
             // Categorization models
             CategorizationAttempt.self,
             CategorizationPrompt.self,
             CategorizationSession.self,
             CategorizationBatch.self,
+            // Job management
+            Job.self,
+            JobExecution.self,
             // Legacy models
             ImportBatch.self,
             ParseRun.self,

@@ -66,6 +66,9 @@ final class RawFile {
     @Relationship(deleteRule: .nullify)
     var importBatches: [ImportBatch]
 
+    @Relationship(deleteRule: .cascade, inverse: \SourceRow.sourceFile)
+    var sourceRows: [SourceRow]
+
     var uploadedAt: Date
 
     init(fileName: String, content: Data, mimeType: String = "text/csv") {
@@ -76,6 +79,7 @@ final class RawFile {
         self.sha256Hash = content.sha256Hash()
         self.mimeType = mimeType
         self.importBatches = []
+        self.sourceRows = []
         self.uploadedAt = Date()
     }
 }
