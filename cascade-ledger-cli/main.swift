@@ -259,10 +259,11 @@ case "source":
             }
 
             for (index, csvRow) in csvRows.enumerated() {
-                // Parse date - try common formats
+                // Parse date - try common formats and field names
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "MM/dd/yyyy"
-                let date = csvRow["Date"].flatMap { dateFormatter.date(from: $0) } ?? Date()
+                let dateString = csvRow["Date"] ?? csvRow["Run Date"] ?? csvRow["Settlement Date"]
+                let date = dateString.flatMap { dateFormatter.date(from: $0) } ?? Date()
 
                 // Create mapped data
                 let mappedData = MappedRowData(
