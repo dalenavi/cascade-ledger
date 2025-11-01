@@ -7,6 +7,41 @@
 
 import Foundation
 import SwiftData
+import CryptoKit
+
+// MARK: - CSV Parser
+
+func parseCSV(fileURL: URL) throws -> (headers: [String], rows: [[String: String]]) {
+    let content = try String(contentsOf: fileURL, encoding: .utf8)
+    let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+
+    guard let headerLine = lines.first else {
+        throw NSError(domain: "CSVParser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Empty CSV file"])
+    }
+
+    let headers = headerLine.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+
+    var rows: [[String: String]] = []
+    for line in lines.dropFirst() {
+        let values = line.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        var row: [String: String] = [:]
+        for (index, header) in headers.enumerated() {
+            if index < values.count {
+                row[header] = values[index]
+            }
+        }
+        rows.append(row)
+    }
+
+    return (headers, rows)
+}
+
+func sha256(data: Data) -> String {
+    let hash = SHA256.hash(data: data)
+    return hash.compactMap { String(format: "%02x", $0) }.joined()
+}
+
+// MARK: - Main
 
 print("Starting CLI...")
 
@@ -121,14 +156,184 @@ case "source":
         }
         print()
 
+    case "add":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade source add <file> [--mapping <name>]")
+            break
+        }
+        let filePath = CommandLine.arguments[3]
+        let fileURL = URL(fileURLWithPath: filePath)
+
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            print("Error: File not found: \(filePath)")
+            break
+        }
+
+        // Parse optional --mapping flag
+        var mappingName: String?
+        if CommandLine.arguments.count >= 6 && CommandLine.arguments[4] == "--mapping" {
+            mappingName = CommandLine.arguments[5]
+        }
+
+        do {
+            // Read and hash file
+            let fileData = try Data(contentsOf: fileURL)
+            let hash = sha256(data: fileData)
+
+            // Check for duplicates
+            let existingDesc = FetchDescriptor<RawFile>(
+                predicate: #Predicate { $0.sha256Hash == hash }
+            )
+            if let existing = try context.fetch(existingDesc).first {
+                print("⚠️  File already exists: \(existing.fileName)")
+                print("  Uploaded: \(existing.uploadedAt.formatted())")
+                print("  Use existing file or upload a different version")
+                break
+            }
+
+            // Parse CSV
+            let (headers, csvRows) = try parseCSV(fileURL: fileURL)
+
+            // Create RawFile
+            let rawFile = RawFile(
+                fileName: fileURL.lastPathComponent,
+                content: fileData,
+                mimeType: "text/csv"
+            )
+            context.insert(rawFile)
+
+            // Create SourceRows
+            var globalRowNumber = 1
+            if let maxGlobal = try? context.fetch(FetchDescriptor<SourceRow>(sortBy: [SortDescriptor(\.globalRowNumber, order: .reverse)])).first {
+                globalRowNumber = maxGlobal.globalRowNumber + 1
+            }
+
+            for (index, csvRow) in csvRows.enumerated() {
+                // Parse date - try common formats
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "MM/dd/yyyy"
+                let date = csvRow["Date"].flatMap { dateFormatter.date(from: $0) } ?? Date()
+
+                // Create mapped data
+                let mappedData = MappedRowData(
+                    date: date,
+                    action: csvRow["Action"] ?? csvRow["Type"] ?? "unknown",
+                    symbol: csvRow["Symbol"],
+                    quantity: csvRow["Quantity"].flatMap { Decimal(string: $0) },
+                    amount: csvRow["Amount"].flatMap { Decimal(string: $0) },
+                    price: csvRow["Price"].flatMap { Decimal(string: $0) },
+                    description: csvRow["Description"],
+                    settlementDate: nil,
+                    balance: csvRow["Balance"].flatMap { Decimal(string: $0) }
+                )
+
+                let sourceRow = SourceRow(
+                    rowNumber: index + 1,
+                    globalRowNumber: globalRowNumber + index,
+                    sourceFile: rawFile,
+                    rawData: csvRow,
+                    mappedData: mappedData
+                )
+                context.insert(sourceRow)
+            }
+
+            // Associate with mapping if specified
+            if let mapName = mappingName {
+                let mappingDesc = FetchDescriptor<Mapping>(
+                    predicate: #Predicate { $0.name == mapName }
+                )
+                if let mapping = try? context.fetch(mappingDesc).first {
+                    mapping.sourceFiles.append(rawFile)
+                }
+            }
+
+            try context.save()
+
+            print("✓ Added source file '\(fileURL.lastPathComponent)'")
+            print("  Rows: \(csvRows.count)")
+            print("  Hash: \(String(hash.prefix(12)))...")
+            if let mapName = mappingName {
+                print("  Associated with mapping: \(mapName)")
+                print("  Coverage: 0/\(csvRows.count) (0.0%)")
+            }
+
+        } catch {
+            print("Error: Failed to add source file: \(error)")
+        }
+
     default:
         print("""
         Source file commands:
           source list               List all source files
+          source add <file>         Add CSV file [--mapping <name>]
+        """)
+    }
+
+case "account":
+    switch subcommand {
+    case "list":
+        let accounts = try! context.fetch(FetchDescriptor<Account>())
+        print("\n📊 ACCOUNTS:")
+        print(String(repeating: "=", count: 60))
+        if accounts.isEmpty {
+            print("  No accounts found")
+        }
+        for account in accounts {
+            print("\n  • \(account.name)")
+            if let inst = account.institution {
+                print("    Institution: \(inst)")
+            }
+            print("    Mappings: \(account.mappings.count)")
+            print("    Active Transactions: \(account.activeTransactions.count)")
+            if let activeMapping = account.activeMapping {
+                print("    Active Mapping: \(activeMapping.name)")
+            }
+        }
+        print()
+
+    case "create":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade account create <name> [--institution <name>] [--type <type>]")
+            break
+        }
+        let name = CommandLine.arguments[3]
+
+        var institution: String?
+        var accountType: String?
+
+        // Parse optional flags
+        var i = 4
+        while i < CommandLine.arguments.count - 1 {
+            if CommandLine.arguments[i] == "--institution" {
+                institution = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--type" {
+                accountType = CommandLine.arguments[i + 1]
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        let account = Account(name: name, institution: nil)
+        context.insert(account)
+        try! context.save()
+
+        print("✓ Created account '\(name)'")
+        if let inst = institution {
+            print("  Note: Institution '\(inst)' (Institution model support coming soon)")
+        }
+
+    default:
+        print("""
+        Account commands:
+          account list              List all accounts
+          account create <name> [--institution <name>] [--type <type>]
         """)
     }
 
 case "accounts":
+    // Backwards compatibility - redirect to account list
     let accounts = try! context.fetch(FetchDescriptor<Account>())
     print("\n📊 YOUR ACCOUNTS (via SwiftData):")
     print(String(repeating: "=", count: 60))
@@ -218,22 +423,25 @@ default:
     Cascade CLI - Direct SwiftData Model Access
 
     Commands:
+      account create <name>           Create new account
+      account list                    List accounts
+
       mapping list                    List all mappings
       mapping create <name>           Create new mapping
       mapping activate <name>         Activate a mapping
 
       source list                     List source files
 
-      accounts                        List accounts
+      accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
       unbalanced                      Find unbalanced transactions
       stats                           Statistics
 
     Examples:
+      ./cascade account create "Fidelity" --institution "Fidelity Investments"
+      ./cascade mapping create "v1" --account "Fidelity"
       ./cascade mapping list
-      ./cascade mapping create "v2" --account "Fidelity"
-      ./cascade mapping activate "v2"
-      ./cascade accounts
+      ./cascade account list
       ./cascade tx 20
 
     Features:
