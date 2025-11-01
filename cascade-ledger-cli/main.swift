@@ -1217,6 +1217,186 @@ case "stats":
     print("    Duplicates: \(duplicates.count)")
     print()
 
+case "query":
+    // Parse filters
+    var assetFilters: [String] = []
+    var accountFilter: String?
+    var startDate: Date?
+    var endDate: Date?
+    var outputMode = "transactions" // default
+
+    var i = 2
+    while i < CommandLine.arguments.count {
+        if CommandLine.arguments[i] == "--asset" && i + 1 < CommandLine.arguments.count {
+            assetFilters = [CommandLine.arguments[i + 1]]
+            i += 2
+        } else if CommandLine.arguments[i] == "--assets" && i + 1 < CommandLine.arguments.count {
+            assetFilters = CommandLine.arguments[i + 1].split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) }
+            i += 2
+        } else if CommandLine.arguments[i] == "--account" && i + 1 < CommandLine.arguments.count {
+            accountFilter = CommandLine.arguments[i + 1]
+            i += 2
+        } else if CommandLine.arguments[i] == "--from" && i + 1 < CommandLine.arguments.count {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "MM/dd/yyyy"
+            startDate = dateFormatter.date(from: CommandLine.arguments[i + 1])
+            i += 2
+        } else if CommandLine.arguments[i] == "--to" && i + 1 < CommandLine.arguments.count {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "MM/dd/yyyy"
+            endDate = dateFormatter.date(from: CommandLine.arguments[i + 1])
+            i += 2
+        } else if CommandLine.arguments[i] == "--positions" {
+            outputMode = "positions"
+            i += 1
+        } else if CommandLine.arguments[i] == "--balances" {
+            outputMode = "balances"
+            i += 1
+        } else if CommandLine.arguments[i] == "--summary" {
+            outputMode = "summary"
+            i += 1
+        } else {
+            i += 1
+        }
+    }
+
+    // Get transactions to query
+    var allTransactions = try! context.fetch(FetchDescriptor<Transaction>(
+        sortBy: [SortDescriptor(\.date, order: .forward)]
+    ))
+
+    // Apply filters
+    if let accountName = accountFilter {
+        allTransactions = allTransactions.filter { $0.account?.name.contains(accountName) ?? false }
+    }
+
+    if let start = startDate {
+        allTransactions = allTransactions.filter { $0.date >= start }
+    }
+
+    if let end = endDate {
+        allTransactions = allTransactions.filter { $0.date <= end }
+    }
+
+    if !assetFilters.isEmpty {
+        allTransactions = allTransactions.filter { tx in
+            tx.journalEntries.contains { entry in
+                assetFilters.contains(entry.accountName)
+            }
+        }
+    }
+
+    // Output based on mode
+    switch outputMode {
+    case "positions":
+        print("\n📊 POSITIONS")
+        if !assetFilters.isEmpty {
+            print("Assets: \(assetFilters.joined(separator: ", "))")
+        }
+        print(String(repeating: "=", count: 80))
+
+        // Calculate positions by asset
+        var positions: [String: (quantity: Decimal, txCount: Int)] = [:]
+
+        for tx in allTransactions {
+            for entry in tx.journalEntries where entry.accountName != "Cash" {
+                if assetFilters.isEmpty || assetFilters.contains(entry.accountName) {
+                    let current = positions[entry.accountName] ?? (quantity: 0, txCount: 0)
+                    var newQuantity = current.quantity
+
+                    if let qty = entry.quantity {
+                        if entry.debitAmount != nil {
+                            newQuantity += qty // Buy
+                        } else {
+                            newQuantity -= qty // Sell
+                        }
+                    }
+
+                    positions[entry.accountName] = (quantity: newQuantity, txCount: current.txCount + 1)
+                }
+            }
+        }
+
+        if positions.isEmpty {
+            print("  No positions found")
+        } else {
+            print("\nAsset           Quantity        Transactions")
+            print(String(repeating: "─", count: 50))
+            for (asset, data) in positions.sorted(by: { $0.key < $1.key }) {
+                let qtyNum = (data.quantity as NSDecimalNumber).doubleValue
+                let assetPadded = asset.padding(toLength: 15, withPad: " ", startingAt: 0)
+                let qtyStr = String(format: "%.3f", qtyNum).padding(toLength: 12, withPad: " ", startingAt: 0)
+                print("  \(assetPadded) \(qtyStr) shares    \(data.txCount)")
+            }
+            print(String(repeating: "─", count: 50))
+            print("Total assets: \(positions.count)")
+        }
+        print()
+
+    case "transactions":
+        print("\n💰 QUERY RESULTS")
+        if !assetFilters.isEmpty {
+            print("Assets: \(assetFilters.joined(separator: ", "))")
+        }
+        if let start = startDate {
+            print("From: \(start.formatted(date: .abbreviated, time: .omitted))")
+        }
+        if let end = endDate {
+            print("To: \(end.formatted(date: .abbreviated, time: .omitted))")
+        }
+        print(String(repeating: "=", count: 80))
+
+        if allTransactions.isEmpty {
+            print("  No transactions match filters")
+        } else {
+            for tx in allTransactions.reversed() { // Show newest first
+                print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
+
+                // Journal entries (minimal)
+                for entry in tx.journalEntries {
+                    let amount = entry.debitAmount ?? entry.creditAmount ?? 0
+                    let side = entry.debitAmount != nil ? "DR" : "CR"
+
+                    if let qty = entry.quantity {
+                        print("    \(entry.accountName): \(qty) shares \(side) ($\(amount))")
+                    } else {
+                        print("    \(entry.accountName): $\(amount) \(side)")
+                    }
+                }
+
+                // Source rows
+                let sourceRows = Set(tx.journalEntries.flatMap { $0.sourceRows })
+                if !sourceRows.isEmpty {
+                    print("    Source: Row \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+                }
+            }
+
+            print("\n" + String(repeating: "=", count: 80))
+            print("Total: \(allTransactions.count) transactions")
+        }
+        print()
+
+    default:
+        print("""
+        Query commands:
+          query [--transactions]      List transactions (default)
+          query --positions           Show asset positions
+          query --balances            Show balance progression
+
+        Filters:
+          --asset <name>              Single asset (SPY, QQQ, etc.)
+          --assets <list>             Multiple assets (SPY,QQQ,NVDA)
+          --account <name>            Filter by account
+          --from <MM/dd/yyyy>         Start date
+          --to <MM/dd/yyyy>           End date
+
+        Examples:
+          cascade query --asset SPY
+          cascade query --positions --assets SPY,QQQ
+          cascade query --asset SPY --from "05/01/2024" --to "05/31/2024"
+        """)
+    }
+
 default:
     print("""
 
