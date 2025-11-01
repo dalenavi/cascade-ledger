@@ -1569,6 +1569,10 @@ default:
       validate [<mapping>]            Validate mapping (coverage, balance, duplicates)
       coverage [<mapping>]            Show coverage report [--detailed]
 
+      query [--positions]             Query/filter transactions
+                                      [--asset <name>] [--category <path>]
+                                      [--from <date>] [--to <date>]
+
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
       unbalanced                      Find unbalanced transactions
