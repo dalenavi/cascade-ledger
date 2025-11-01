@@ -59,6 +59,9 @@ final class Transaction {
     @Relationship(deleteRule: .nullify, inverse: \CategorizationAttempt.transaction)
     var categorizationAttempts: [CategorizationAttempt]
 
+    @Relationship
+    var mapping: Mapping?  // Which mapping version this transaction belongs to
+
     // Source tracking
     var sourceRowNumbersData: Data?   // JSON-encoded array of row numbers
     var sourceHash: String?           // Hash for deduplication

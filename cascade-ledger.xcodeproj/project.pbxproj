@@ -102,6 +102,7 @@
 				Models/Job.swift,
 				Models/JobData.swift,
 				Models/JournalEntry.swift,
+				Models/Mapping.swift,
 				Models/ParsePlan.swift,
 				Models/ParseRun.swift,
 				Models/Position.swift,

@@ -36,6 +36,13 @@ final class Account {
     // Active categorization session (which set of transactions is "real" right now)
     var activeCategorizationSessionId: UUID?
 
+    // Mapping support for source row transformations
+    @Relationship(deleteRule: .cascade)
+    var mappings: [Mapping]
+
+    // Active mapping (determines which transactions are visible)
+    var activeMappingId: UUID?
+
     // CSV field mapping configuration
     var csvFieldMappingJSON: Data?  // Encoded CSVFieldMapping
 
@@ -58,9 +65,20 @@ final class Account {
         return categorizationSessions.first { $0.id == activeId }
     }
 
+    // Get the active mapping
+    var activeMapping: Mapping? {
+        guard let activeId = activeMappingId else { return nil }
+        return mappings.first { $0.id == activeId }
+    }
+
     // Get transactions from active session
     var activeTransactions: [Transaction] {
-        activeCategorizationSession?.transactions ?? []
+        // If mapping system is active, use mapping transactions
+        if let activeMapping = activeMapping {
+            return activeMapping.transactions
+        }
+        // Otherwise fall back to categorization session
+        return activeCategorizationSession?.transactions ?? []
     }
 
     // Activate a categorization session
@@ -70,6 +88,15 @@ final class Account {
 
     func deactivate() {
         activeCategorizationSessionId = nil
+    }
+
+    // Activate a mapping
+    func activateMapping(_ mapping: Mapping) {
+        activeMappingId = mapping.id
+    }
+
+    func deactivateMapping() {
+        activeMappingId = nil
     }
 
     var createdAt: Date
@@ -82,6 +109,7 @@ final class Account {
         self.parsePlans = []
         self.importBatches = []
         self.categorizationSessions = []
+        self.mappings = []
         self.createdAt = Date()
         self.updatedAt = Date()
     }
