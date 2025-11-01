@@ -103,17 +103,21 @@ struct TransactionRowView: View {
         return impact
     }
 
-    // Get non-cash asset impacts
-    private var assetImpacts: [(String, Decimal, Bool)] { // (asset, amount, isIncrease)
+    // Get non-cash asset impacts with quantity
+    private var assetImpacts: [(String, Decimal?, String)] { // (asset, quantity, sign)
         transaction.journalEntries
             .filter { $0.accountName != "Cash" }
             .compactMap { entry in
-                if let debit = entry.debitAmount {
-                    return (entry.accountName, debit, true) // DR = asset increase
-                } else if let credit = entry.creditAmount {
-                    return (entry.accountName, credit, false) // CR = asset decrease
+                if let quantity = entry.quantity {
+                    // Has quantity - show shares/units
+                    let sign = entry.debitAmount != nil ? "+" : "−"
+                    return (entry.accountName, quantity, sign)
+                } else {
+                    // No quantity - show USD amount
+                    let amount = entry.debitAmount ?? entry.creditAmount ?? 0
+                    let sign = entry.debitAmount != nil ? "+" : "−"
+                    return (entry.accountName, amount, sign)
                 }
-                return nil
             }
     }
 
@@ -202,17 +206,19 @@ struct TransactionRowView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    ForEach(assetImpacts, id: \.0) { asset, amount, isIncrease in
+                    ForEach(assetImpacts, id: \.0) { asset, quantity, sign in
                         HStack(spacing: 2) {
                             Text(asset)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(isIncrease ? "+" : "−")
+                            Text(sign)
                                 .font(.caption2)
-                                .foregroundStyle(isIncrease ? .green : .red)
-                            Text(formatCurrency(amount))
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(sign == "+" ? .green : .red)
+                            if let qty = quantity {
+                                Text("\(qty as NSDecimalNumber)")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }

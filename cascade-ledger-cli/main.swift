@@ -606,11 +606,26 @@ case "transaction":
 
         // Create journal entries from specification
         for entry in parsedEntries {
+            // Extract quantity for non-Cash assets from source rows
+            var quantity: Decimal?
+            var quantityUnit: String?
+
+            if entry.accountName != "Cash" {
+                // Get quantity from first source row
+                if let firstRow = sourceRows.first {
+                    quantity = firstRow.mappedData.quantity
+                    // Use account name as unit (e.g., "shares")
+                    quantityUnit = "shares"
+                }
+            }
+
             let journalEntry = JournalEntry(
                 accountType: .asset,
                 accountName: entry.accountName,
                 debitAmount: entry.side == "DR" ? entry.amount : nil,
                 creditAmount: entry.side == "CR" ? entry.amount : nil,
+                quantity: quantity,
+                quantityUnit: quantityUnit,
                 transaction: transaction
             )
             journalEntry.sourceRows = sourceRows
