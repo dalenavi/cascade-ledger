@@ -855,6 +855,36 @@ case "transaction":
         let sourceRows = Set(transaction.journalEntries.flatMap { $0.sourceRows })
         print("  Current source rows: \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
 
+    case "categorize":
+        guard CommandLine.arguments.count >= 5 else {
+            print("Usage: cascade transaction categorize <id> <category>")
+            print("Example: cascade transaction categorize ABC123... investment/equity/tech")
+            break
+        }
+
+        let txId = CommandLine.arguments[3]
+        let category = CommandLine.arguments[4]
+
+        guard let txUUID = UUID(uuidString: txId) else {
+            print("Error: Invalid transaction ID")
+            break
+        }
+
+        let txDesc = FetchDescriptor<Transaction>(
+            predicate: #Predicate { $0.id == txUUID }
+        )
+        guard let transaction = try? context.fetch(txDesc).first else {
+            print("Error: Transaction not found")
+            break
+        }
+
+        transaction.userCategory = category
+        try! context.save()
+
+        print("✓ Categorized transaction")
+        print("  \(transaction.date.formatted(date: .numeric, time: .omitted)) - \(transaction.transactionDescription)")
+        print("  Category: \(category)")
+
     case "show":
         guard CommandLine.arguments.count >= 4 else {
             print("Usage: cascade transaction show <id>")
