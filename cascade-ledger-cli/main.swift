@@ -21,13 +21,11 @@ func parseCSV(fileURL: URL) throws -> (headers: [String], rows: [[String: String
         throw NSError(domain: "CSVParser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Empty CSV file"])
     }
 
-    let headers = headerLine.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .init(charactersIn: "\"")) }
+    let headers = parseLine(headerLine).map { $0.trimmingCharacters(in: .whitespaces) }
 
     var rows: [[String: String]] = []
     for line in lines.dropFirst() {
-        let values = line.components(separatedBy: ",").map {
-            $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .init(charactersIn: "\""))
-        }
+        let values = parseLine(line)
         var row: [String: String] = [:]
         for (index, header) in headers.enumerated() {
             if index < values.count && !values[index].isEmpty {
@@ -38,6 +36,30 @@ func parseCSV(fileURL: URL) throws -> (headers: [String], rows: [[String: String
     }
 
     return (headers, rows)
+}
+
+// Parse a single CSV line respecting quotes
+func parseLine(_ line: String) -> [String] {
+    var fields: [String] = []
+    var currentField = ""
+    var inQuotes = false
+
+    for char in line {
+        if char == "\"" {
+            inQuotes.toggle()
+        } else if char == "," && !inQuotes {
+            // Only split on comma outside quotes
+            fields.append(currentField.trimmingCharacters(in: .whitespaces))
+            currentField = ""
+        } else {
+            currentField.append(char)
+        }
+    }
+
+    // Add the last field
+    fields.append(currentField.trimmingCharacters(in: .whitespaces))
+
+    return fields
 }
 
 func sha256(data: Data) -> String {
