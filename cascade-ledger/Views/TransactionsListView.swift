@@ -103,11 +103,18 @@ struct TransactionRowView: View {
         return impact
     }
 
-    // Get non-cash assets
-    private var nonCashAssets: [String] {
+    // Get non-cash asset impacts
+    private var assetImpacts: [(String, Decimal, Bool)] { // (asset, amount, isIncrease)
         transaction.journalEntries
             .filter { $0.accountName != "Cash" }
-            .map { $0.accountName }
+            .compactMap { entry in
+                if let debit = entry.debitAmount {
+                    return (entry.accountName, debit, true) // DR = asset increase
+                } else if let credit = entry.creditAmount {
+                    return (entry.accountName, credit, false) // CR = asset decrease
+                }
+                return nil
+            }
     }
 
     // Check balance discrepancy
@@ -189,15 +196,25 @@ struct TransactionRowView: View {
                         .foregroundStyle(cashImpact >= 0 ? .green : .red)
                 }
 
-                // Non-cash assets
-                if !nonCashAssets.isEmpty {
+                // Asset impacts
+                if !assetImpacts.isEmpty {
                     Text("•")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    Text(nonCashAssets.joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ForEach(assetImpacts, id: \.0) { asset, amount, isIncrease in
+                        HStack(spacing: 2) {
+                            Text(asset)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(isIncrease ? "+" : "−")
+                                .font(.caption2)
+                                .foregroundStyle(isIncrease ? .green : .red)
+                            Text(formatCurrency(amount))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Spacer()
