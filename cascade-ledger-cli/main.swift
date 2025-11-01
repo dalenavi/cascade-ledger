@@ -662,7 +662,7 @@ case "transaction":
         }
 
         // Sort by date DESC, then by source row number ASC (earlier rows first)
-        for tx in transactions.sorted(by: { tx1, tx2 in
+        let sortedTxs = transactions.sorted(by: { tx1, tx2 in
             if tx1.date != tx2.date {
                 return tx1.date > tx2.date
             }
@@ -672,7 +672,40 @@ case "transaction":
             let minRow1 = rows1.map { $0.rowNumber }.min() ?? Int.max
             let minRow2 = rows2.map { $0.rowNumber }.min() ?? Int.max
             return minRow1 < minRow2
-        }) {
+        })
+
+        // Calculate running balance for display
+        var runningBalance: Decimal = 0
+
+        for tx in sortedTxs.reversed() { // Process chronologically for balance calculation
+            // Update running balance with Cash entries
+            for entry in tx.journalEntries {
+                if entry.accountName == "Cash" {
+                    if let debit = entry.debitAmount {
+                        runningBalance += debit
+                    }
+                    if let credit = entry.creditAmount {
+                        runningBalance -= credit
+                    }
+                }
+            }
+        }
+
+        // Display in reverse chronological order
+        runningBalance = 0
+        for tx in sortedTxs.reversed() {
+            // Calculate balance after this transaction
+            for entry in tx.journalEntries {
+                if entry.accountName == "Cash" {
+                    if let debit = entry.debitAmount {
+                        runningBalance += debit
+                    }
+                    if let credit = entry.creditAmount {
+                        runningBalance -= credit
+                    }
+                }
+            }
+
             print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
             print("    ID: \(tx.id)")
             print("    Type: \(tx.transactionType.rawValue)")
@@ -693,9 +726,14 @@ case "transaction":
                 print("    Source rows: \(rowNums.map(String.init).joined(separator: ", "))")
             }
 
-            // Show reported balance if available
+            // Show balances
             if let csvBal = tx.csvBalance {
                 print("    Reported balance: $\(csvBal)")
+                print("    Derived balance:  $\(runningBalance)")
+                let diff = abs(runningBalance - csvBal)
+                if diff > 0.01 {
+                    print("    ⚠️  Discrepancy: $\(diff)")
+                }
             }
         }
         print()
