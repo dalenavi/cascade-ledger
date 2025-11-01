@@ -41,6 +41,27 @@ func sha256(data: Data) -> String {
     return hash.compactMap { String(format: "%02x", $0) }.joined()
 }
 
+func parseRowNumbers(_ input: String) -> [Int] {
+    var result: [Int] = []
+    let parts = input.split(separator: ",")
+
+    for part in parts {
+        let trimmed = part.trimmingCharacters(in: .whitespaces)
+        if trimmed.contains("-") {
+            let range = trimmed.split(separator: "-")
+            if range.count == 2,
+               let start = Int(range[0]),
+               let end = Int(range[1]) {
+                result.append(contentsOf: start...end)
+            }
+        } else if let num = Int(trimmed) {
+            result.append(num)
+        }
+    }
+
+    return result
+}
+
 // MARK: - Main
 
 print("Starting CLI...")
@@ -409,6 +430,142 @@ case "account":
         """)
     }
 
+case "transaction":
+    switch subcommand {
+    case "create":
+        // Parse required args
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade transaction create --from-rows <rows> --type <type> --description <desc> [--mapping <name>]")
+            break
+        }
+
+        var rowNumbers: [Int] = []
+        var txType: String?
+        var description: String?
+        var mappingName: String?
+
+        var i = 3
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--from-rows" && i + 1 < CommandLine.arguments.count {
+                rowNumbers = parseRowNumbers(CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--type" && i + 1 < CommandLine.arguments.count {
+                txType = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--description" && i + 1 < CommandLine.arguments.count {
+                description = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
+                mappingName = CommandLine.arguments[i + 1]
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        guard !rowNumbers.isEmpty, let txType = txType, let description = description else {
+            print("Error: Missing required arguments")
+            print("Usage: cascade transaction create --from-rows <rows> --type <type> --description <desc>")
+            break
+        }
+
+        // Fetch source rows by global row number
+        let rowsDesc = FetchDescriptor<SourceRow>(
+            predicate: #Predicate { rowNumbers.contains($0.globalRowNumber) }
+        )
+        let sourceRows = try! context.fetch(rowsDesc)
+
+        guard sourceRows.count == rowNumbers.count else {
+            print("Error: Could not find all requested rows")
+            print("  Requested: \(rowNumbers.count), Found: \(sourceRows.count)")
+            break
+        }
+
+        // Get mapping if specified
+        var mapping: Mapping?
+        if let mapName = mappingName {
+            let mappingDesc = FetchDescriptor<Mapping>(
+                predicate: #Predicate { $0.name == mapName }
+            )
+            mapping = try? context.fetch(mappingDesc).first
+        }
+
+        // Parse transaction type
+        guard let transactionType = TransactionType(rawValue: txType) else {
+            print("Error: Invalid transaction type '\(txType)'")
+            print("Valid types: buy, sell, deposit, withdrawal, dividend, fee, transfer")
+            break
+        }
+
+        // Use date from first source row
+        let txDate = sourceRows.first?.mappedData.date ?? Date()
+
+        // Get account from mapping
+        guard let account = mapping?.account else {
+            print("Error: Mapping has no associated account")
+            print("Use: cascade mapping create <name> --account <account-name>")
+            break
+        }
+
+        // Create transaction
+        let transaction = Transaction(
+            date: txDate,
+            description: description,
+            type: transactionType,
+            account: account
+        )
+        if let mapping = mapping {
+            transaction.mapping = mapping
+        }
+        context.insert(transaction)
+
+        // Auto-create journal entries based on transaction type
+        // For now, create simple entries - we'll enhance this later
+        let totalAmount = sourceRows.compactMap { $0.mappedData.amount }.reduce(0, +)
+
+        // Create debit entry (asset/expense increases)
+        let debitEntry = JournalEntry(
+            accountType: .asset,
+            accountName: sourceRows.first?.mappedData.symbol ?? "Asset",
+            debitAmount: abs(totalAmount),
+            creditAmount: nil,
+            transaction: transaction
+        )
+        debitEntry.sourceRows = sourceRows
+        context.insert(debitEntry)
+
+        // Create credit entry (cash/liability decreases)
+        let creditEntry = JournalEntry(
+            accountType: .asset,
+            accountName: "Cash",
+            debitAmount: nil,
+            creditAmount: abs(totalAmount),
+            transaction: transaction
+        )
+        context.insert(creditEntry)
+
+        try! context.save()
+
+        print("✓ Created transaction '\(description)'")
+        print("  Type: \(txType)")
+        print("  Amount: $\(totalAmount)")
+        print("  Source rows: \(rowNumbers.sorted().map(String.init).joined(separator: ", "))")
+        print("  Journal entries: 2 (auto-balanced)")
+        if let mapping = mapping {
+            // Calculate new coverage
+            let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }
+            let mapped = allRows.filter { !$0.journalEntries.isEmpty }
+            let coverage = allRows.count > 0 ? Double(mapped.count) / Double(allRows.count) * 100 : 0
+            print("  Coverage: \(mapped.count)/\(allRows.count) (\(String(format: "%.1f", coverage))%)")
+        }
+
+    default:
+        print("""
+        Transaction commands:
+          transaction create --from-rows <rows> --type <type> --description <desc> [--mapping <name>]
+        """)
+    }
+
 case "accounts":
     // Backwards compatibility - redirect to account list
     let accounts = try! context.fetch(FetchDescriptor<Account>())
@@ -512,6 +669,9 @@ default:
 
       rows <file>                     View source rows [--range 1-10]
 
+      transaction create              Create transaction from rows
+                                      [--from-rows <rows> --type <type> --description <desc>]
+
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
       unbalanced                      Find unbalanced transactions
@@ -522,6 +682,7 @@ default:
       ./cascade mapping create "v1" --account "Fidelity"
       ./cascade source add data.csv --mapping "v1"
       ./cascade rows data.csv --range 1-10
+      ./cascade transaction create --from-rows 1,2 --type buy --description "Buy AAPL"
       ./cascade rows data.csv --show-transactions
       ./cascade tx 20
 
