@@ -283,11 +283,11 @@ case "source":
                     action: csvRow["Action"] ?? csvRow["Type"] ?? "unknown",
                     symbol: csvRow["Symbol"],
                     quantity: csvRow["Quantity"].flatMap { Decimal(string: $0) },
-                    amount: csvRow["Amount"].flatMap { Decimal(string: $0) },
-                    price: csvRow["Price"].flatMap { Decimal(string: $0) },
+                    amount: csvRow["Amount ($)"].flatMap { Decimal(string: $0) },
+                    price: csvRow["Price ($)"].flatMap { Decimal(string: $0) },
                     description: csvRow["Description"],
                     settlementDate: nil,
-                    balance: csvRow["Balance"].flatMap { Decimal(string: $0) }
+                    balance: csvRow["Cash Balance ($)"].flatMap { Decimal(string: $0) }
                 )
 
                 let sourceRow = SourceRow(
@@ -574,6 +574,12 @@ case "transaction":
             account: account
         )
         transaction.mapping = mapping
+
+        // Set reported balance from last source row's balance field
+        if let lastRow = sourceRows.sorted(by: { $0.rowNumber > $1.rowNumber }).first {
+            transaction.csvBalance = lastRow.mappedData.balance
+        }
+
         context.insert(transaction)
 
         // Create journal entries from specification
@@ -599,6 +605,9 @@ case "transaction":
         }
         print("  Source rows: \(rowNumbers.sorted().map(String.init).joined(separator: ", "))")
         print("  Balanced: \(transaction.isBalanced ? "✅" : "❌")")
+        if let csvBal = transaction.csvBalance {
+            print("  Reported balance: $\(csvBal)")
+        }
 
         // Calculate new coverage
         let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }
@@ -901,11 +910,11 @@ case "validate":
         }
     }
 
-    // Transaction balance validation
-    let transactions = mapping.transactions
+    // Transaction balance validation (debits = credits)
+    let transactions = mapping.transactions.sorted(by: { $0.date < $1.date })
     let unbalanced = transactions.filter { !$0.isBalanced }
 
-    print("\n⚖️  Transaction Balance:")
+    print("\n⚖️  Transaction Balance (Debits = Credits):")
     print("  Total transactions: \(transactions.count)")
     print("  Balanced: \(transactions.count - unbalanced.count)")
     print("  Unbalanced: \(unbalanced.count)")
@@ -919,9 +928,40 @@ case "validate":
         }
     }
 
+    // Balance reconciliation (reported vs derived)
+    print("\n💰 Balance Reconciliation (Reported vs Derived):")
+
+    // Calculate running balance
+    var runningBalance: Decimal = 0
+    var discrepancies: [(Transaction, Decimal, Decimal, Decimal)] = []
+
+    for tx in transactions {
+        // Update running balance with net cash impact
+        runningBalance += tx.netCashImpact
+
+        // Compare with reported balance
+        if let reportedBalance = tx.csvBalance {
+            let difference = abs(runningBalance - reportedBalance)
+            if difference > 0.01 { // More than 1 cent difference
+                discrepancies.append((tx, reportedBalance, runningBalance, difference))
+            }
+        }
+    }
+
+    print("  Transactions with balance data: \(transactions.filter { $0.csvBalance != nil }.count)/\(transactions.count)")
+    print("  Balance discrepancies: \(discrepancies.count)")
+
+    if !discrepancies.isEmpty {
+        print("\n  Discrepancies found:")
+        for (tx, reported, derived, diff) in discrepancies.prefix(10) {
+            print("    • \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
+            print("      Reported: $\(reported) | Derived: $\(derived) | Diff: $\(diff)")
+        }
+    }
+
     // Overall status
     print("\n" + String(repeating: "=", count: 80))
-    if coverage == 100 && duplicates.isEmpty && unbalanced.isEmpty {
+    if coverage == 100 && duplicates.isEmpty && unbalanced.isEmpty && discrepancies.isEmpty {
         print("✅ VALID - Ready to activate!")
     } else {
         print("⚠️  INCOMPLETE - Address issues above before activating")
