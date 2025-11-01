@@ -566,6 +566,191 @@ case "transaction":
         """)
     }
 
+case "validate":
+    // Get mapping name
+    var mappingName: String?
+    if CommandLine.arguments.count >= 3 && !CommandLine.arguments[2].starts(with: "--") {
+        mappingName = CommandLine.arguments[2]
+    } else if CommandLine.arguments.count >= 4 && CommandLine.arguments[2] == "--mapping" {
+        mappingName = CommandLine.arguments[3]
+    }
+
+    // Find mapping
+    var mapping: Mapping?
+    if let mapName = mappingName {
+        let mappingDesc = FetchDescriptor<Mapping>(
+            predicate: #Predicate { $0.name == mapName }
+        )
+        mapping = try? context.fetch(mappingDesc).first
+    } else {
+        // Use first mapping if not specified
+        mapping = try? context.fetch(FetchDescriptor<Mapping>()).first
+    }
+
+    guard let mapping = mapping else {
+        print("Error: No mapping found")
+        print("Usage: cascade validate [--mapping <name>]")
+        break
+    }
+
+    print("\n🔍 VALIDATION REPORT: \(mapping.name)")
+    print(String(repeating: "=", count: 80))
+
+    // Coverage validation
+    let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }.sorted { $0.globalRowNumber < $1.globalRowNumber }
+    let mappedRows = allRows.filter { !$0.journalEntries.isEmpty }
+    let unmappedRows = allRows.filter { $0.journalEntries.isEmpty }
+    let coverage = allRows.count > 0 ? Double(mappedRows.count) / Double(allRows.count) * 100 : 0
+
+    print("\n📊 Coverage:")
+    print("  Total rows: \(allRows.count)")
+    print("  Mapped: \(mappedRows.count) (\(String(format: "%.1f", coverage))%)")
+    print("  Unmapped: \(unmappedRows.count)")
+
+    if !unmappedRows.isEmpty {
+        print("\n  Unmapped row ranges:")
+        // Group consecutive rows
+        var ranges: [(Int, Int)] = []
+        var currentStart = unmappedRows[0].rowNumber
+        var currentEnd = currentStart
+
+        for i in 1..<unmappedRows.count {
+            if unmappedRows[i].rowNumber == currentEnd + 1 {
+                currentEnd = unmappedRows[i].rowNumber
+            } else {
+                ranges.append((currentStart, currentEnd))
+                currentStart = unmappedRows[i].rowNumber
+                currentEnd = currentStart
+            }
+        }
+        ranges.append((currentStart, currentEnd))
+
+        for (start, end) in ranges.prefix(10) {
+            if start == end {
+                print("    Row \(start)")
+            } else {
+                print("    Rows \(start)-\(end)")
+            }
+        }
+        if ranges.count > 10 {
+            print("    ... and \(ranges.count - 10) more ranges")
+        }
+    }
+
+    // Duplicate detection
+    var duplicates: [(SourceRow, [Transaction])] = []
+    for row in allRows {
+        let txs = Set(row.journalEntries.compactMap { $0.transaction })
+        if txs.count > 1 {
+            duplicates.append((row, Array(txs)))
+        }
+    }
+
+    if !duplicates.isEmpty {
+        print("\n⚠️  Double-mapped rows:")
+        for (row, txs) in duplicates.prefix(10) {
+            print("  Row \(row.rowNumber) mapped to \(txs.count) transactions:")
+            for tx in txs {
+                print("    • \(tx.transactionDescription)")
+            }
+        }
+    }
+
+    // Transaction balance validation
+    let transactions = mapping.transactions
+    let unbalanced = transactions.filter { !$0.isBalanced }
+
+    print("\n⚖️  Transaction Balance:")
+    print("  Total transactions: \(transactions.count)")
+    print("  Balanced: \(transactions.count - unbalanced.count)")
+    print("  Unbalanced: \(unbalanced.count)")
+
+    if !unbalanced.isEmpty {
+        print("\n  Unbalanced transactions:")
+        for tx in unbalanced.prefix(5) {
+            print("    • \(tx.transactionDescription)")
+            print("      Debits: $\(tx.totalDebits) | Credits: $\(tx.totalCredits)")
+            print("      Difference: $\(abs(tx.totalDebits - tx.totalCredits))")
+        }
+    }
+
+    // Overall status
+    print("\n" + String(repeating: "=", count: 80))
+    if coverage == 100 && duplicates.isEmpty && unbalanced.isEmpty {
+        print("✅ VALID - Ready to activate!")
+    } else {
+        print("⚠️  INCOMPLETE - Address issues above before activating")
+    }
+    print()
+
+case "coverage":
+    // Get mapping name
+    var mappingName: String?
+    var detailed = false
+
+    var i = 2
+    while i < CommandLine.arguments.count {
+        if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
+            mappingName = CommandLine.arguments[i + 1]
+            i += 2
+        } else if CommandLine.arguments[i] == "--detailed" {
+            detailed = true
+            i += 1
+        } else if !CommandLine.arguments[i].starts(with: "--") {
+            mappingName = CommandLine.arguments[i]
+            i += 1
+        } else {
+            i += 1
+        }
+    }
+
+    // Find mapping
+    var mapping: Mapping?
+    if let mapName = mappingName {
+        let mappingDesc = FetchDescriptor<Mapping>(
+            predicate: #Predicate { $0.name == mapName }
+        )
+        mapping = try? context.fetch(mappingDesc).first
+    } else {
+        mapping = try? context.fetch(FetchDescriptor<Mapping>()).first
+    }
+
+    guard let mapping = mapping else {
+        print("Error: No mapping found")
+        print("Usage: cascade coverage [<name>] [--mapping <name>] [--detailed]")
+        break
+    }
+
+    print("\n📈 COVERAGE REPORT: \(mapping.name)")
+    print(String(repeating: "=", count: 80))
+
+    // Per-file coverage
+    for file in mapping.sourceFiles {
+        let allRows = file.sourceRows.sorted { $0.rowNumber < $1.rowNumber }
+        let mappedRows = allRows.filter { !$0.journalEntries.isEmpty }
+        let coverage = allRows.count > 0 ? Double(mappedRows.count) / Double(allRows.count) * 100 : 0
+
+        print("\n  📁 \(file.fileName)")
+        print("    Total rows: \(allRows.count)")
+        print("    Mapped: \(mappedRows.count) (\(String(format: "%.1f", coverage))%)")
+
+        if detailed {
+            let unmapped = allRows.filter { $0.journalEntries.isEmpty }
+            if !unmapped.isEmpty {
+                print("    Unmapped: \(unmapped.map { String($0.rowNumber) }.joined(separator: ", "))")
+            }
+        }
+    }
+
+    // Overall stats
+    let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }
+    let mapped = allRows.filter { !$0.journalEntries.isEmpty }
+    let totalCoverage = allRows.count > 0 ? Double(mapped.count) / Double(allRows.count) * 100 : 0
+
+    print("\n" + String(repeating: "=", count: 80))
+    print("Overall: \(mapped.count)/\(allRows.count) rows mapped (\(String(format: "%.1f", totalCoverage))%)")
+    print()
+
 case "accounts":
     // Backwards compatibility - redirect to account list
     let accounts = try! context.fetch(FetchDescriptor<Account>())
@@ -672,6 +857,9 @@ default:
       transaction create              Create transaction from rows
                                       [--from-rows <rows> --type <type> --description <desc>]
 
+      validate [<mapping>]            Validate mapping (coverage, balance, duplicates)
+      coverage [<mapping>]            Show coverage report [--detailed]
+
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
       unbalanced                      Find unbalanced transactions
@@ -683,8 +871,9 @@ default:
       ./cascade source add data.csv --mapping "v1"
       ./cascade rows data.csv --range 1-10
       ./cascade transaction create --from-rows 1,2 --type buy --description "Buy AAPL"
+      ./cascade validate "v1"
+      ./cascade coverage "v1" --detailed
       ./cascade rows data.csv --show-transactions
-      ./cascade tx 20
 
     Features:
       ✅ Uses SwiftData models (NOT SQL!)
