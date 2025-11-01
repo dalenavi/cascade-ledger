@@ -48,6 +48,7 @@ struct PortfolioValueContent: View {
     @Query private var allPrices: [AssetPrice]
 
     @State private var valueData: [MarketValuePoint] = []
+    @State private var verticalSegments: [VerticalSegment] = []
     @State private var assetSummaries: [AssetValueSummary] = []
     @State private var totalValue: Decimal = 0
     @State private var totalCost: Decimal = 0
@@ -139,6 +140,7 @@ struct PortfolioValueContent: View {
                 // Right: Market value chart
                 MarketValueChartView(
                     valueData: filteredValueData,
+                    verticalSegments: filteredVerticalSegments,
                     granularity: granularity
                 )
                 .frame(minWidth: 500)
@@ -156,9 +158,12 @@ struct PortfolioValueContent: View {
         valueData.filter { selectedAssets.contains($0.assetId) }
     }
 
+    private var filteredVerticalSegments: [VerticalSegment] {
+        verticalSegments.filter { selectedAssets.contains($0.assetId) }
+    }
+
     private func calculatePortfolioValue() {
         print("\n=== Portfolio Value Calculation ===")
-        let dateRange = timeRange.dateRange
 
         // Calculate current holdings by analyzing journal entries
         var assetHoldings: [String: Decimal] = [:]  // assetName -> quantity
@@ -315,6 +320,63 @@ struct PortfolioValueContent: View {
         }
 
         valueData = points.sorted { $0.date < $1.date }
+
+        // Extract vertical segments (consecutive points at same date with different values)
+        verticalSegments = extractVerticalSegments(from: valueData)
+    }
+
+    private func extractVerticalSegments(from points: [MarketValuePoint]) -> [VerticalSegment] {
+        print("\n=== Extracting Vertical Segments ===")
+        print("Total points: \(points.count)")
+
+        guard !points.isEmpty else {
+            print("No points to extract")
+            return []
+        }
+
+        var segments: [VerticalSegment] = []
+
+        // Group by asset first to avoid interleaving
+        let byAsset = Dictionary(grouping: points) { $0.assetId }
+
+        for (assetId, assetPoints) in byAsset {
+            // Sort this asset's points by date
+            let sorted = assetPoints.sorted { $0.date < $1.date }
+
+            guard sorted.count >= 2 else { continue }
+
+            // Find transaction pairs: non-transaction point followed by transaction point within ~1 hour
+            for i in 0..<(sorted.count - 1) {
+                let p1 = sorted[i]
+                let p2 = sorted[i + 1]
+
+                // Transaction pair: p1 is NOT transaction point, p2 IS transaction point
+                guard !p1.isTransactionPoint && p2.isTransactionPoint else { continue }
+
+                // Must be same segment
+                guard p1.segmentId == p2.segmentId else { continue }
+
+                // Check if they're within ~1 hour of each other
+                let timeDiff = abs(p2.date.timeIntervalSince(p1.date))
+                guard timeDiff <= 3700 else { continue }
+
+                // Create vertical segment
+                print("  → Creating vertical segment at \(p1.date.formatted(date: .abbreviated, time: .omitted)): $\(p1.value) → $\(p2.value) [\(assetId)]")
+                segments.append(VerticalSegment(
+                    date: p1.date,
+                    assetId: assetId,
+                    valueStart: p1.value,
+                    valueEnd: p2.value,
+                    quantityBefore: p1.quantity,
+                    quantityAfter: p2.quantity
+                ))
+            }
+        }
+
+        print("\nTotal vertical segments created: \(segments.count)")
+        print("====================================\n")
+
+        return segments
     }
 
     private func calculateUSDValueOverTime() -> [MarketValuePoint] {
@@ -348,6 +410,8 @@ struct PortfolioValueContent: View {
 
         var cumulativeBalance: Decimal = 0
         var points: [MarketValuePoint] = []
+        let segmentId = UUID()  // USD typically doesn't go to zero, use single segment
+        var sequenceCounter = 0
 
         // Calculate starting balance (all entries before date range)
         let priorEntries = cashJournalEntries.filter { $0.date < dateRange.start }
@@ -367,8 +431,12 @@ struct PortfolioValueContent: View {
                 assetId: "USD",
                 quantity: cumulativeBalance,
                 price: 1.0,
-                value: cumulativeBalance
+                value: cumulativeBalance,
+                segmentId: segmentId,
+                isTransactionPoint: false,
+                sequenceOrder: sequenceCounter
             ))
+            sequenceCounter += 1
             print("  Start: \(dayBefore.formatted(date: .abbreviated, time: .omitted)) → $\(cumulativeBalance)")
         }
 
@@ -383,8 +451,12 @@ struct PortfolioValueContent: View {
                 assetId: "USD",
                 quantity: cumulativeBalance,
                 price: 1.0,
-                value: cumulativeBalance
+                value: cumulativeBalance,
+                segmentId: segmentId,
+                isTransactionPoint: false,
+                sequenceOrder: sequenceCounter
             ))
+            sequenceCounter += 1
 
             if index < 10 {  // Log first 10
                 print("  \(entry.date.formatted(date: .abbreviated, time: .omitted)): \(entry.description.prefix(30)) DR:\(entry.debit) CR:\(entry.credit) → balance: \(cumulativeBalance)")
@@ -402,31 +474,62 @@ struct PortfolioValueContent: View {
         let calendar = Calendar.current
         let dateRange = timeRange.dateRange
 
-        // Build position timeline from journal entries
-        var positionTimeline: [(Date, Decimal)] = []  // (date, quantity held)
+        print("\n=== Calculate Market Value: \(assetId) ===")
+        print("Date range: \(dateRange.start.formatted(date: .abbreviated, time: .omitted)) to \(dateRange.end.formatted(date: .abbreviated, time: .omitted))")
+
+        // Build position timeline from journal entries WITH transaction tracking
+        var positionEvents: [PositionEvent] = []
         var cumulativeQty: Decimal = 0
 
-        for transaction in entries.sorted(by: { $0.date < $1.date }) {
+        // Get ALL transactions (including before date range) to track position correctly
+        let allTransactions = allEntries.filter { tx in
+            tx.journalEntries.contains { entry in
+                entry.accountType == .asset && entry.accountName == assetId
+            }
+        }.sorted { $0.date < $1.date }
+
+        for transaction in allTransactions {
             for entry in transaction.journalEntries {
                 if entry.accountType == .asset && entry.accountName == assetId {
                     let qty = entry.quantity ?? 0
 
+                    guard qty != 0 else { continue }
+
+                    let qtyBefore = cumulativeQty
+
                     if entry.debitAmount != nil {
-                        // Debit increases asset
-                        cumulativeQty += qty
+                        cumulativeQty += qty  // Buy
                     } else if entry.creditAmount != nil {
-                        // Credit decreases asset
-                        cumulativeQty -= qty
+                        cumulativeQty -= qty  // Sell
                     }
 
-                    if qty != 0 {
-                        positionTimeline.append((transaction.date, cumulativeQty))
-                    }
+                    let inRange = transaction.date >= dateRange.start && transaction.date <= dateRange.end
+                    print("  \(inRange ? "✓" : "○") \(transaction.date.formatted(date: .abbreviated, time: .omitted)) - \(qtyBefore) → \(cumulativeQty) shares")
+
+                    positionEvents.append(PositionEvent(
+                        date: transaction.date,
+                        quantityBefore: qtyBefore,
+                        quantityAfter: cumulativeQty,
+                        isTransaction: true
+                    ))
                 }
             }
         }
 
-        guard !positionTimeline.isEmpty else { return [] }
+        print("Total position events: \(positionEvents.count)")
+
+        // Filter to events in range for chart display
+        let eventsInRange = positionEvents.filter { $0.date >= dateRange.start && $0.date <= dateRange.end }
+        print("Events in display range: \(eventsInRange.count)")
+
+        if let firstEvent = eventsInRange.first {
+            print("First event in range: \(firstEvent.date.formatted(date: .abbreviated, time: .omitted)) - \(firstEvent.quantityBefore) → \(firstEvent.quantityAfter)")
+            if firstEvent.quantityBefore == 0 {
+                print("  ⚠️ This is the INITIAL BUY - should show vertical from $0")
+            }
+        }
+
+        guard !positionEvents.isEmpty else { return [] }
 
         // Get all price dates for this asset in range
         let pricesForAsset = allPrices.filter { price in
@@ -438,68 +541,230 @@ struct PortfolioValueContent: View {
         guard !pricesForAsset.isEmpty else {
             // No price data - fall back to transaction dates only
             print("⚠️ No price data for \(assetId), showing transaction dates only")
-            return calculateValueAtTransactionDates(positionTimeline, assetId: assetId)
+            return calculateValueAtTransactionDates(positionEvents, assetId: assetId)
         }
 
         var points: [MarketValuePoint] = []
+        var currentSegmentId = UUID()
+        var previousQuantity: Decimal = 0
+        var sequenceCounter = 0
 
-        // For each price date, find the quantity held at that time
+        // Group prices by period (day/week/month based on granularity) and transaction dates
+        var pricesByPeriod: [Date: [AssetPrice]] = [:]
         for pricePoint in pricesForAsset {
-            // Find quantity held on this date
-            let quantityOnDate = positionTimeline
-                .filter { $0.0 <= pricePoint.date }
-                .last?.1 ?? 0
-
-            // Skip if we didn't own any
-            guard quantityOnDate != 0 else { continue }
-
-            // Calculate market value
-            let marketValue = quantityOnDate * pricePoint.price
-
-            // Aggregate by granularity
             let periodStart = granularity.periodStart(for: pricePoint.date, calendar: calendar)
+            pricesByPeriod[periodStart, default: []].append(pricePoint)
+        }
 
-            // Check if we already have a point for this period
-            if let existingIndex = points.firstIndex(where: {
-                calendar.isDate($0.date, equalTo: periodStart, toGranularity: .day)
-            }) {
-                // Update with latest value for this period
-                points[existingIndex] = MarketValuePoint(
-                    date: periodStart,
-                    assetId: assetId,
-                    quantity: quantityOnDate,
-                    price: pricePoint.price,
-                    value: marketValue
-                )
-            } else {
+        // For each period, create ONE point (unless there's a transaction)
+        for (periodStart, pricesInPeriod) in pricesByPeriod.sorted(by: { $0.key < $1.key }) {
+            // Use the LAST price in the period (typically closing price)
+            guard let lastPrice = pricesInPeriod.sorted(by: { $0.date < $1.date }).last else { continue }
+
+            // Check if there's a transaction in this period (must be in date range)
+            let transactionInPeriod = positionEvents.first {
+                $0.date >= dateRange.start &&
+                $0.date <= dateRange.end &&
+                calendar.isDate(granularity.periodStart(for: $0.date, calendar: calendar), equalTo: periodStart, toGranularity: .day)
+            }
+
+            // Find quantity held at end of this period (using ALL position events)
+            let quantityAtEnd = positionEvents
+                .filter {
+                    let txPeriod = granularity.periodStart(for: $0.date, calendar: calendar)
+                    return txPeriod <= periodStart
+                }
+                .last?.quantityAfter ?? 0
+
+            // Check if position changed from zero to non-zero (new segment starts)
+            if previousQuantity == 0 && quantityAtEnd != 0 {
+                print("  🆕 New position segment starting at \(periodStart.formatted(date: .abbreviated, time: .omitted))")
+                currentSegmentId = UUID()
+            }
+
+            // Skip if we don't own any (line breaks naturally)
+            guard quantityAtEnd != 0 || transactionInPeriod != nil else {
+                previousQuantity = quantityAtEnd
+                continue
+            }
+
+            // If there's a transaction in this period, inject "before" and "after" points
+            if let txEvent = transactionInPeriod, txEvent.quantityBefore != txEvent.quantityAfter {
+                let valueBefore = txEvent.quantityBefore * lastPrice.price
+                let valueAfter = txEvent.quantityAfter * lastPrice.price
+
+                print("  → Transaction at \(periodStart.formatted(date: .abbreviated, time: .omitted)): $\(valueBefore) → $\(valueAfter)")
+
+                if txEvent.quantityBefore == 0 {
+                    print("    💰 INITIAL BUY from $0")
+                }
+
+                // Skip if both values are zero
+                if valueBefore != 0 || valueAfter != 0 {
+                    let isInitialBuy = txEvent.quantityBefore == 0
+
+                    // For initial buy from zero, use NEW segment for both points
+                    let segmentForThisTransaction: UUID
+                    if isInitialBuy {
+                        segmentForThisTransaction = UUID()
+                    } else {
+                        segmentForThisTransaction = currentSegmentId
+                    }
+
+                    // Add "before" point (ALWAYS add for initial buy, even if $0)
+                    if valueBefore != 0 || isInitialBuy {
+                        print("    ✓ Adding BEFORE point: $\(valueBefore) at seq \(sequenceCounter), segmentId: \(segmentForThisTransaction)")
+                        points.append(MarketValuePoint(
+                            date: periodStart,
+                            assetId: assetId,
+                            quantity: txEvent.quantityBefore,
+                            price: lastPrice.price,
+                            value: valueBefore,
+                            segmentId: segmentForThisTransaction,
+                            isTransactionPoint: false,
+                            sequenceOrder: sequenceCounter
+                        ))
+                        sequenceCounter += 1
+                    }
+
+                    // Add "after" point (creates vertical line) - offset by 1 hour for chart visibility
+                    if valueAfter != 0 {
+                        let afterDate = calendar.date(byAdding: .hour, value: 1, to: periodStart)!
+                        print("    ✓ Adding AFTER point: $\(valueAfter) at seq \(sequenceCounter), segmentId: \(segmentForThisTransaction)")
+                        points.append(MarketValuePoint(
+                            date: afterDate,  // Offset by 1 hour
+                            assetId: assetId,
+                            quantity: txEvent.quantityAfter,
+                            price: lastPrice.price,
+                            value: valueAfter,
+                            segmentId: segmentForThisTransaction,
+                            isTransactionPoint: true,
+                            sequenceOrder: sequenceCounter
+                        ))
+                        sequenceCounter += 1
+                    }
+
+                    // Update current segment after adding both points
+                    if isInitialBuy {
+                        currentSegmentId = segmentForThisTransaction
+                    }
+                }
+            } else if quantityAtEnd != 0 {
+                // Regular price movement point - ONE per period
+                let marketValue = quantityAtEnd * lastPrice.price
+
                 points.append(MarketValuePoint(
                     date: periodStart,
                     assetId: assetId,
-                    quantity: quantityOnDate,
-                    price: pricePoint.price,
-                    value: marketValue
+                    quantity: quantityAtEnd,
+                    price: lastPrice.price,
+                    value: marketValue,
+                    segmentId: currentSegmentId,
+                    isTransactionPoint: false,
+                    sequenceOrder: sequenceCounter
                 ))
+                sequenceCounter += 1
             }
+
+            previousQuantity = quantityAtEnd
         }
 
-        return points.sorted { $0.date < $1.date }
+        let sorted = points.sorted {
+            if $0.date == $1.date {
+                return $0.sequenceOrder < $1.sequenceOrder
+            }
+            return $0.date < $1.date
+        }
+
+        print("Total points created for \(assetId): \(sorted.count)")
+        print("====================================\n")
+
+        return sorted
     }
 
-    // Fallback when no price data available
-    private func calculateValueAtTransactionDates(_ positionTimeline: [(Date, Decimal)], assetId: String) -> [MarketValuePoint] {
+    private func calculateValueAtTransactionDates(_ positionEvents: [PositionEvent], assetId: String) -> [MarketValuePoint] {
         let calendar = Calendar.current
+        var currentSegmentId = UUID()
+        var previousQuantity: Decimal = 0
+        var sequenceCounter = 0
 
-        return positionTimeline.map { (date, quantity) in
-            let periodStart = granularity.periodStart(for: date, calendar: calendar)
-            let price = getPrice(for: assetId, on: date)
-            return MarketValuePoint(
-                date: periodStart,
-                assetId: assetId,
-                quantity: quantity,
-                price: price,
-                value: quantity * price
-            )
+        var points: [MarketValuePoint] = []
+
+        for event in positionEvents {
+            let periodStart = granularity.periodStart(for: event.date, calendar: calendar)
+            let price = getPrice(for: assetId, on: event.date)
+
+            // Check if position changed from zero to non-zero (new segment starts)
+            if previousQuantity == 0 && event.quantityAfter != 0 {
+                currentSegmentId = UUID()
+            }
+
+            let valueBefore = event.quantityBefore * price
+            let valueAfter = event.quantityAfter * price
+
+            let isInitialBuy = event.quantityBefore == 0
+
+            // For initial buy from zero, use NEW segment for both points
+            let segmentForThisTransaction: UUID
+            if isInitialBuy {
+                segmentForThisTransaction = UUID()
+            } else {
+                segmentForThisTransaction = currentSegmentId
+            }
+
+            // Add "before" point (ALWAYS add for initial buy, even if $0)
+            if valueBefore != 0 || isInitialBuy {
+                points.append(MarketValuePoint(
+                    date: periodStart,
+                    assetId: assetId,
+                    quantity: event.quantityBefore,
+                    price: price,
+                    value: valueBefore,
+                    segmentId: segmentForThisTransaction,
+                    isTransactionPoint: false,
+                    sequenceOrder: sequenceCounter
+                ))
+                sequenceCounter += 1
+            }
+
+            // Add "after" point if non-zero - offset by 1 hour for chart visibility
+            if valueAfter != 0 {
+                let afterDate = calendar.date(byAdding: .hour, value: 1, to: periodStart)!
+                points.append(MarketValuePoint(
+                    date: afterDate,  // Offset by 1 hour
+                    assetId: assetId,
+                    quantity: event.quantityAfter,
+                    price: price,
+                    value: valueAfter,
+                    segmentId: segmentForThisTransaction,
+                    isTransactionPoint: true,
+                    sequenceOrder: sequenceCounter
+                ))
+                sequenceCounter += 1
+            }
+
+            // Update current segment after adding both points
+            if isInitialBuy {
+                currentSegmentId = segmentForThisTransaction
+            }
+
+            previousQuantity = event.quantityAfter
         }
+
+        return points.sorted {
+            if $0.date == $1.date {
+                return $0.sequenceOrder < $1.sequenceOrder
+            }
+            return $0.date < $1.date
+        }
+    }
+
+    // Helper struct for fallback function
+    struct PositionEvent {
+        let date: Date
+        let quantityBefore: Decimal
+        let quantityAfter: Decimal
+        let isTransaction: Bool
     }
 
     private func getPrice(for assetId: String, on date: Date) -> Decimal {
@@ -675,7 +940,11 @@ struct AssetValueCard: View {
 
 struct MarketValueChartView: View {
     let valueData: [MarketValuePoint]
+    let verticalSegments: [VerticalSegment]
     let granularity: TimeGranularity
+
+    @State private var selectedSegment: VerticalSegment?
+    @State private var selectedPoint: MarketValuePoint?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -704,14 +973,69 @@ struct MarketValueChartView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Chart(valueData) { point in
-                    LineMark(
-                        x: .value("Date", point.date),
-                        y: .value("Value", NSDecimalNumber(decimal: point.value).doubleValue)
-                    )
-                    .foregroundStyle(by: .value("Asset", point.assetId))
-                    .symbol(by: .value("Asset", point.assetId))
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                Chart {
+                    // Value lines (broken by segmentId to stop at zero)
+                    ForEach(valueData) { point in
+                        LineMark(
+                            x: .value("Date", point.date),
+                            y: .value("Value", NSDecimalNumber(decimal: point.value).doubleValue),
+                            series: .value("Series", "\(point.assetId)-\(point.segmentId.uuidString)")
+                        )
+                        .foregroundStyle(by: .value("Asset", point.assetId))
+                        .symbol(by: .value("Asset", point.assetId))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                    }
+
+                    // Vertical segment overlays for buy/sell (thicker, high contrast)
+                    ForEach(verticalSegments) { segment in
+                        // Dark overlay for vertical segments
+                        RectangleMark(
+                            x: .value("Date", segment.date),
+                            yStart: .value("Start", NSDecimalNumber(decimal: segment.valueStart).doubleValue),
+                            yEnd: .value("End", NSDecimalNumber(decimal: segment.valueEnd).doubleValue),
+                            width: .fixed(12)
+                        )
+                        .foregroundStyle(.black.opacity(0.5))
+                        .annotation(position: .top, alignment: .center, spacing: -2) {
+                            // Arrow indicator above each segment (clickable)
+                            Button(action: {
+                                selectedSegment = (selectedSegment?.id == segment.id) ? nil : segment
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(selectedSegment?.id == segment.id ? Color.blue.opacity(0.8) : Color.white)
+                                        .frame(width: 20, height: 20)
+                                        .shadow(radius: 2)
+
+                                    Text(segment.isBuy ? "▲" : "▼")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(segment.isBuy ? .green : .red)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .help("Click for details: \(segment.isBuy ? "Buy" : "Sell") \(segment.assetId)")
+                        }
+                    }
+
+                    // Show popup for selected segment
+                    if let selected = selectedSegment {
+                        RectangleMark(
+                            x: .value("Date", selected.date),
+                            yStart: .value("Start", NSDecimalNumber(decimal: selected.valueStart).doubleValue),
+                            yEnd: .value("End", NSDecimalNumber(decimal: selected.valueEnd).doubleValue),
+                            width: .fixed(16)
+                        )
+                        .foregroundStyle(.blue.opacity(0.3))
+                        .annotation(position: .topTrailing, alignment: .leading) {
+                            TransactionDetailPopup(segment: selected)
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Clear selection when tapping chart background
+                    selectedSegment = nil
+                    selectedPoint = nil
                 }
                 .chartXAxis {
                     AxisMarks(values: .automatic) { value in
@@ -743,6 +1067,84 @@ struct MarketValueChartView: View {
     }
 }
 
+struct TransactionDetailPopup: View {
+    let segment: VerticalSegment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(segment.isBuy ? "BUY" : "SELL")
+                    .font(.headline)
+                    .foregroundColor(segment.isBuy ? .green : .red)
+                Spacer()
+                Text(segment.assetId)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Date:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(segment.date, format: .dateTime.month().day().year())
+                        .font(.caption)
+                }
+
+                Divider()
+
+                HStack {
+                    Text("Shares:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(segment.isBuy ? "+" : "")\(NSDecimalNumber(decimal: segment.quantityChange).doubleValue, specifier: "%.3f")")
+                        .font(.caption.bold())
+                        .foregroundColor(segment.isBuy ? .green : .red)
+                }
+
+                HStack {
+                    Text("Position:")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(NSDecimalNumber(decimal: segment.quantityBefore).doubleValue, specifier: "%.3f") → \(NSDecimalNumber(decimal: segment.quantityAfter).doubleValue, specifier: "%.3f")")
+                        .font(.caption2)
+                }
+
+                Divider()
+
+                HStack {
+                    Text("Value:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("$\(NSDecimalNumber(decimal: abs(segment.changeAmount)).doubleValue, specifier: "%.2f")")
+                        .font(.caption.bold())
+                        .foregroundColor(segment.isBuy ? .green : .red)
+                }
+
+                HStack {
+                    Text("Portfolio:")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("$\(NSDecimalNumber(decimal: segment.valueStart).doubleValue, specifier: "%.0f") → $\(NSDecimalNumber(decimal: segment.valueEnd).doubleValue, specifier: "%.0f")")
+                        .font(.caption2)
+                }
+            }
+        }
+        .padding(12)
+        .background(.white)
+        .cornerRadius(8)
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+        .frame(width: 220)
+    }
+}
+
 // MARK: - Data Models
 
 struct MarketValuePoint: Identifiable {
@@ -752,6 +1154,31 @@ struct MarketValuePoint: Identifiable {
     let quantity: Decimal
     let price: Decimal
     let value: Decimal  // quantity × price
+    let segmentId: UUID  // Unique ID per holding period (to break lines at zero)
+    let isTransactionPoint: Bool  // True if this point represents the "after" state of a buy/sell
+    let sequenceOrder: Int  // To ensure proper ordering when multiple points share same date
+}
+
+struct VerticalSegment: Identifiable {
+    let id = UUID()
+    let date: Date
+    let assetId: String
+    let valueStart: Decimal
+    let valueEnd: Decimal
+    let quantityBefore: Decimal
+    let quantityAfter: Decimal
+
+    var changeAmount: Decimal {
+        valueEnd - valueStart
+    }
+
+    var quantityChange: Decimal {
+        quantityAfter - quantityBefore
+    }
+
+    var isBuy: Bool {
+        valueEnd > valueStart
+    }
 }
 
 struct AssetValueSummary {

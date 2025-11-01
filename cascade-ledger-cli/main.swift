@@ -88,6 +88,22 @@ func parseRowNumbers(_ input: String) -> [Int] {
     return result
 }
 
+// MARK: - JSON Batch Structures
+
+struct BatchTransactionInput: Codable {
+    let fromRows: [Int]
+    let date: String  // MM/DD/YYYY format
+    let description: String
+    let entries: [BatchEntryInput]
+    let category: String?
+}
+
+struct BatchEntryInput: Codable {
+    let account: String
+    let side: String  // "DR" or "CR"
+    let amount: String  // Will parse to Decimal
+}
+
 // MARK: - Main
 
 print("Starting CLI...")
@@ -499,10 +515,12 @@ case "transaction":
     case "create":
         // Parse required args
         guard CommandLine.arguments.count >= 4 else {
-            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>] [--category <path>]")
+            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>] [--category <path>] [--quantity <amount>]")
             print("Entries format: \"AccountName:DR:Amount,AccountName:CR:Amount\"")
             print("Category format: \"primary/secondary/tertiary\" (e.g., \"investment/equity/tech\")")
+            print("Quantity: Optional quantity for asset purchases (e.g., --quantity \"0.00181432\" for BTC)")
             print("Example: --entries \"Cash:DR:100.50,Revenue:CR:100.50\" --category \"income/payroll\"")
+            print("Example: --entries \"BTC:DR:196.51,BTC-Fee:DR:3.50,Cash:CR:200.01\" --quantity \"0.00181\" --category \"investment/crypto\"")
             break
         }
 
@@ -512,6 +530,7 @@ case "transaction":
         var mappingName: String?
         var entriesSpec: String?
         var category: String?
+        var explicitQuantity: Decimal?
 
         var i = 3
         while i < CommandLine.arguments.count {
@@ -534,6 +553,9 @@ case "transaction":
                 i += 2
             } else if CommandLine.arguments[i] == "--category" && i + 1 < CommandLine.arguments.count {
                 category = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--quantity" && i + 1 < CommandLine.arguments.count {
+                explicitQuantity = Decimal(string: CommandLine.arguments[i + 1])
                 i += 2
             } else {
                 i += 1
@@ -610,46 +632,76 @@ case "transaction":
 
         context.insert(transaction)
 
+        // Determine primary asset for quantity tracking
+        // Primary asset is the first debit entry that's a security (not Cash, not Fee/Expense)
+        let primaryAssetName = parsedEntries.first { entry in
+            entry.side == "DR" &&
+            entry.accountName != "Cash" &&
+            !entry.accountName.contains("Fee") &&
+            !entry.accountName.contains("Purchase") &&
+            !entry.accountName.contains("Payment") &&
+            !entry.accountName.contains("Expense")
+        }?.accountName
+
         // Create journal entries from specification
         for entry in parsedEntries {
-            // Extract quantity for non-Cash assets from source rows
+            // Infer account type from account name patterns
+            let accountName = entry.accountName
+            let accountType: AccountType
             var quantity: Decimal?
             var quantityUnit: String?
             var asset: Asset?
 
-            if entry.accountName != "Cash" {
-                // Get quantity from first source row
-                if let firstRow = sourceRows.first {
-                    quantity = firstRow.mappedData.quantity
+            // Determine account type based on name patterns
+            if accountName == "Cash" {
+                accountType = .cash
+            } else if accountName.contains("Payroll") || accountName.contains("Dividend") || accountName.contains("Income") || accountName.contains("Wire-Transfer") || accountName.contains("Bank-Transfer") || accountName.contains("P2P-Income") || accountName.contains("Check-Deposit") {
+                accountType = .income
+            } else if accountName.contains("Fee") || accountName.contains("Interest") || accountName.contains("Purchase") || accountName.contains("Payment") || accountName.contains("Expense") || accountName.contains("Card-") || accountName.contains("Merchant-") || accountName.contains("Venmo") || accountName.contains("EFT") || accountName.contains("Discover") {
+                accountType = .expense
+            } else if accountName.contains("Transfer") || accountName.contains("VS-") {
+                accountType = .equity  // Transfers are equity movements
+            } else {
+                accountType = .asset  // Securities: BTC, SPY, QQQ, NVDA, FXAIX, etc.
+            }
+
+            // Handle quantity ONLY for the primary asset (not fees, not cash, not expenses)
+            if accountType == .asset && accountName == primaryAssetName {
+                // Use explicit quantity if provided (for crypto/securities)
+                if let explicitQty = explicitQuantity {
+                    quantity = explicitQty
                     quantityUnit = "shares"
+                } else {
+                    // Get quantity from first source row
+                    if let firstRow = sourceRows.first {
+                        // Don't use dollar amount as quantity
+                        if let qty = firstRow.mappedData.quantity, qty < 1000 {
+                            // Likely actual share count (< 1000)
+                            quantity = qty
+                            quantityUnit = "shares"
+                        }
+                    }
                 }
 
-                // Only create Asset for securities (have quantity > 0)
-                // Don't create Assets for income/expense/transfer accounts
+                // Create or fetch Asset record for securities
+                // Only if we have a valid quantity
                 if let qty = quantity, qty > 0 {
-                    let symbolToFind = entry.accountName
                     let assetDesc = FetchDescriptor<Asset>(
-                        predicate: #Predicate { $0.symbol == symbolToFind }
+                        predicate: #Predicate { $0.symbol == accountName }
                     )
                     if let existingAsset = try? context.fetch(assetDesc).first {
                         asset = existingAsset
                     } else {
-                        // Create new Asset only for securities (exclude income/expense accounts)
-                        let excludePatterns = ["Dividend", "Transfer", "Payroll", "Wire", "Check", "Venmo", "EFT", "Margin", "Expense", "Interest"]
-                        let shouldCreateAsset = !excludePatterns.contains { symbolToFind.contains($0) }
-
-                        if shouldCreateAsset {
-                            let newAsset = Asset(symbol: symbolToFind, name: symbolToFind)
-                            context.insert(newAsset)
-                            asset = newAsset
-                        }
+                        let newAsset = Asset(symbol: accountName, name: accountName)
+                        context.insert(newAsset)
+                        asset = newAsset
                     }
                 }
             }
 
             let journalEntry = JournalEntry(
-                accountType: .asset,
-                accountName: entry.accountName,
+                accountType: accountType,
+                accountName: accountName,
                 debitAmount: entry.side == "DR" ? entry.amount : nil,
                 creditAmount: entry.side == "CR" ? entry.amount : nil,
                 quantity: quantity,
@@ -957,15 +1009,258 @@ case "transaction":
         }
         print()
 
+    case "batch-create":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade transaction batch-create --input <file.json> --mapping <name> [--dry-run] [--continue-on-error]")
+            break
+        }
+
+        var inputFile: String?
+        var mappingName: String?
+        var dryRun = false
+        var continueOnError = false
+
+        var i = 3
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--input" && i + 1 < CommandLine.arguments.count {
+                inputFile = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
+                mappingName = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--dry-run" {
+                dryRun = true
+                i += 1
+            } else if CommandLine.arguments[i] == "--continue-on-error" {
+                continueOnError = true
+                i += 1
+            } else {
+                i += 1
+            }
+        }
+
+        guard let inputFile = inputFile, let mapName = mappingName else {
+            print("Error: --input and --mapping are required")
+            break
+        }
+
+        // Read and parse JSON
+        guard let jsonData = try? Data(contentsOf: URL(fileURLWithPath: inputFile)) else {
+            print("Error: Could not read file: \(inputFile)")
+            break
+        }
+
+        let decoder = JSONDecoder()
+        guard let batchInput = try? decoder.decode([BatchTransactionInput].self, from: jsonData) else {
+            print("Error: Invalid JSON format")
+            print("Expected: Array of {fromRows, date, description, entries, category}")
+            break
+        }
+
+        print("Processing batch: \(batchInput.count) transactions...")
+        if dryRun {
+            print("DRY RUN - No changes will be saved")
+        }
+        print("")
+
+        // Get mapping
+        let mappingDesc = FetchDescriptor<Mapping>(
+            predicate: #Predicate { $0.name == mapName }
+        )
+        guard let mapping = try? context.fetch(mappingDesc).first else {
+            print("Error: Mapping '\(mapName)' not found")
+            break
+        }
+
+        guard let account = mapping.account else {
+            print("Error: Mapping has no account")
+            break
+        }
+
+        // Process each transaction
+        var succeeded = 0
+        var failed = 0
+        var errors: [(Int, String)] = []
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MM/dd/yyyy"
+
+        for (index, txInput) in batchInput.enumerated() {
+            // Validate and create transaction
+            guard let txDate = dateFormatter.date(from: txInput.date) else {
+                let error = "Row \(txInput.fromRows.first ?? 0): Invalid date format '\(txInput.date)'"
+                errors.append((index, error))
+                if !continueOnError {
+                    print("❌ \(error)")
+                    break
+                }
+                failed += 1
+                continue
+            }
+
+            // Parse and validate entries
+            var parsedEntries: [(accountName: String, side: String, amount: Decimal)] = []
+            var totalDR: Decimal = 0
+            var totalCR: Decimal = 0
+            var hasError = false
+
+            for entry in txInput.entries {
+                guard let amount = Decimal(string: entry.amount) else {
+                    let error = "Row \(txInput.fromRows.first ?? 0): Invalid amount '\(entry.amount)'"
+                    errors.append((index, error))
+                    hasError = true
+                    break
+                }
+
+                guard entry.side == "DR" || entry.side == "CR" else {
+                    let error = "Row \(txInput.fromRows.first ?? 0): Invalid side '\(entry.side)' (must be DR or CR)"
+                    errors.append((index, error))
+                    hasError = true
+                    break
+                }
+
+                parsedEntries.append((accountName: entry.account, side: entry.side, amount: amount))
+
+                if entry.side == "DR" {
+                    totalDR += amount
+                } else {
+                    totalCR += amount
+                }
+            }
+
+            if hasError {
+                if !continueOnError {
+                    print("❌ Validation failed")
+                    break
+                }
+                failed += 1
+                continue
+            }
+
+            // Check balance
+            if abs(totalDR - totalCR) > 0.01 {
+                let error = "Row \(txInput.fromRows.first ?? 0): Unbalanced (DR: $\(totalDR), CR: $\(totalCR))"
+                errors.append((index, error))
+                if !continueOnError {
+                    print("❌ \(error)")
+                    break
+                }
+                failed += 1
+                continue
+            }
+
+            // Fetch source rows
+            let rowNumbers = txInput.fromRows
+            let rowsDesc = FetchDescriptor<SourceRow>(
+                predicate: #Predicate { rowNumbers.contains($0.globalRowNumber) }
+            )
+            let sourceRows = try! context.fetch(rowsDesc)
+
+            if sourceRows.count != rowNumbers.count {
+                let error = "Row \(txInput.fromRows.first ?? 0): Could not find all source rows"
+                errors.append((index, error))
+                if !continueOnError {
+                    print("❌ \(error)")
+                    break
+                }
+                failed += 1
+                continue
+            }
+
+            if !dryRun {
+                // Create transaction
+                let transaction = Transaction(
+                    date: txDate,
+                    description: txInput.description,
+                    type: .transfer,
+                    account: account
+                )
+                transaction.mapping = mapping
+                transaction.userCategory = txInput.category
+
+                if let lastRow = sourceRows.sorted(by: { $0.rowNumber > $1.rowNumber }).first {
+                    transaction.csvBalance = lastRow.mappedData.balance
+                }
+
+                context.insert(transaction)
+
+                // Create journal entries
+                for entry in parsedEntries {
+                    var quantity: Decimal?
+                    var quantityUnit: String?
+                    var asset: Asset?
+
+                    if entry.accountName != "Cash" {
+                        if let firstRow = sourceRows.first {
+                            quantity = firstRow.mappedData.quantity
+                            quantityUnit = "shares"
+                        }
+
+                        if let qty = quantity, qty > 0 {
+                            let symbolToFind = entry.accountName
+                            let assetDesc = FetchDescriptor<Asset>(
+                                predicate: #Predicate { $0.symbol == symbolToFind }
+                            )
+                            if let existingAsset = try? context.fetch(assetDesc).first {
+                                asset = existingAsset
+                            } else {
+                                let excludePatterns = ["Dividend", "Transfer", "Payroll", "Wire", "Check", "Venmo", "EFT", "Margin", "Expense", "Interest"]
+                                let shouldCreateAsset = !excludePatterns.contains { symbolToFind.contains($0) }
+
+                                if shouldCreateAsset {
+                                    let newAsset = Asset(symbol: symbolToFind, name: symbolToFind)
+                                    context.insert(newAsset)
+                                    asset = newAsset
+                                }
+                            }
+                        }
+                    }
+
+                    let journalEntry = JournalEntry(
+                        accountType: .asset,
+                        accountName: entry.accountName,
+                        debitAmount: entry.side == "DR" ? entry.amount : nil,
+                        creditAmount: entry.side == "CR" ? entry.amount : nil,
+                        quantity: quantity,
+                        quantityUnit: quantityUnit,
+                        transaction: transaction
+                    )
+                    journalEntry.asset = asset
+                    journalEntry.sourceRows = sourceRows
+                    context.insert(journalEntry)
+                }
+            }
+
+            print("✓ Row \(txInput.fromRows.map(String.init).joined(separator: ",")): \(txInput.description)")
+            succeeded += 1
+        }
+
+        if !dryRun {
+            try! context.save()
+        }
+
+        print("")
+        print("Summary:")
+        print("  Succeeded: \(succeeded)/\(batchInput.count)")
+        if failed > 0 {
+            print("  Failed: \(failed)")
+            print("")
+            print("Failed transactions:")
+            for (_, error) in errors {
+                print("  • \(error)")
+            }
+        }
+
     default:
         print("""
         Transaction commands:
           transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> --mapping <name>
             Entries format: "Account:DR:Amount,Account:CR:Amount"
             Example: --entries "Cash:DR:2032.69,VS-Transfer:CR:2032.69"
+          transaction batch-create --input <file.json> --mapping <name> [--dry-run] [--continue-on-error]
           transaction list [--mapping <name>] [--source-file <file>]
           transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]
           transaction show <id>
+          transaction categorize <id> <category>
         """)
     }
 
@@ -1267,47 +1562,71 @@ case "unbalanced":
     print()
 
 case "reset":
-    // Check for --yes flag
-    let hasYesFlag = CommandLine.arguments.contains("--yes")
-
-    if !hasYesFlag {
-        print("⚠️  This will delete the entire database and recreate it.")
-        print("   The GUI must be restarted after running this.")
+    // Reset command now only supports mapping-specific reset
+    guard CommandLine.arguments.count >= 4 else {
+        print("Usage: cascade reset mapping <mapping-name> [--force]")
         print("")
-        print("Usage: cascade reset --yes")
+        print("Delete a specific mapping and all its transactions.")
+        print("Use --force to skip confirmation prompt.")
         print("")
-        print("This is a destructive operation. Use --yes to confirm.")
+        print("Example: cascade reset mapping cashapp-2025")
         break
     }
 
-    print("Deleting database...")
-
-    // Close the context (we're about to delete the file)
-    // Can't delete within SwiftData due to relationship constraints
-    // Just delete the database file directly
-
-    let dbPath = dbURL.path
-    let shmPath = dbPath + "-shm"
-    let walPath = dbPath + "-wal"
-
-    do {
-        if FileManager.default.fileExists(atPath: dbPath) {
-            try FileManager.default.removeItem(atPath: dbPath)
-        }
-        if FileManager.default.fileExists(atPath: shmPath) {
-            try FileManager.default.removeItem(atPath: shmPath)
-        }
-        if FileManager.default.fileExists(atPath: walPath) {
-            try FileManager.default.removeItem(atPath: walPath)
-        }
-
-        print("✓ Database deleted")
-        print("")
-        print("⚠️  IMPORTANT: Restart the GUI app now")
-        print("   The GUI will create a fresh database on next launch")
-    } catch {
-        print("Error deleting database: \(error)")
+    let subcommand = CommandLine.arguments[2]
+    guard subcommand == "mapping" else {
+        print("Error: Only 'mapping' reset is supported")
+        print("Usage: cascade reset mapping <mapping-name> [--force]")
+        break
     }
+
+    let mappingName = CommandLine.arguments[3]
+    let hasForceFlag = CommandLine.arguments.contains("--force")
+
+    // Find the mapping
+    let mappingDesc = FetchDescriptor<Mapping>(
+        predicate: #Predicate { $0.name == mappingName }
+    )
+    guard let mapping = try? context.fetch(mappingDesc).first else {
+        print("Error: Mapping '\(mappingName)' not found")
+        print("Use 'cascade mapping list' to see available mappings")
+        break
+    }
+
+    // Check if it's active
+    if let account = mapping.account, account.activeMappingId == mapping.id {
+        print("Error: Cannot delete active mapping '\(mappingName)'")
+        print("Deactivate it first or activate a different mapping")
+        break
+    }
+
+    // Show what will be deleted
+    let txCount = mapping.transactions.count
+    let sourceFileCount = mapping.sourceFiles.count
+    let accountName = mapping.account?.name ?? "none"
+
+    print("\n⚠️  Delete mapping '\(mappingName)'?")
+    print("   Account: \(accountName)")
+    print("   Transactions: \(txCount)")
+    print("   Source files: \(sourceFileCount)")
+    print("")
+
+    // Confirm unless --force
+    if !hasForceFlag {
+        print("Type 'yes' to confirm: ", terminator: "")
+        guard let response = readLine()?.lowercased(), response == "yes" else {
+            print("Cancelled")
+            break
+        }
+    }
+
+    // Delete the mapping (cascade delete handles transactions)
+    context.delete(mapping)
+    try! context.save()
+
+    print("✓ Deleted mapping '\(mappingName)'")
+    print("  Removed \(txCount) transactions")
+    print("  Source files remain in database for reuse")
 
 case "stats":
     let accountCount = try! context.fetchCount(FetchDescriptor<Account>())
@@ -1616,7 +1935,7 @@ default:
                                       [--asset <name>] [--category <path>]
                                       [--from <date>] [--to <date>]
 
-      reset                           Delete all transactions/mappings (preserves accounts)
+      reset mapping <name> [--force]  Delete a specific mapping and its transactions
 
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
@@ -1631,6 +1950,7 @@ default:
       ./cascade transaction create --from-rows 1,2 --type buy --description "Buy AAPL"
       ./cascade validate "v1"
       ./cascade coverage "v1" --detailed
+      ./cascade reset mapping "experimental" --force
       ./cascade rows data.csv --show-transactions
 
     Features:
