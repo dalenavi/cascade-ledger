@@ -20,7 +20,7 @@ print("Database exists: \(FileManager.default.fileExists(atPath: dbURL.path))")
 do {
     print("Creating ModelContainer...")
     let container = try ModelContainer(
-        for: Account.self, Transaction.self, JournalEntry.self, Mapping.self,
+        for: Account.self, Transaction.self, JournalEntry.self, Mapping.self, RawFile.self, SourceRow.self,
         configurations: ModelConfiguration(url: dbURL)
     )
 
@@ -100,6 +100,31 @@ case "mapping":
           mapping list              List all mappings
           mapping create <name> [--account <name>]
           mapping activate <name>   Activate a mapping
+        """)
+    }
+
+case "source":
+    switch subcommand {
+    case "list":
+        let files = try! context.fetch(FetchDescriptor<RawFile>(sortBy: [SortDescriptor(\.uploadedAt, order: .reverse)]))
+        print("\n📁 SOURCE FILES:")
+        print(String(repeating: "=", count: 60))
+        if files.isEmpty {
+            print("  No source files found")
+        }
+        for file in files {
+            print("\n  • \(file.fileName)")
+            print("    Size: \(file.fileSize) bytes")
+            print("    Rows: \(file.sourceRows.count)")
+            print("    Hash: \(String(file.sha256Hash.prefix(12)))...")
+            print("    Uploaded: \(file.uploadedAt.formatted(date: .numeric, time: .shortened))")
+        }
+        print()
+
+    default:
+        print("""
+        Source file commands:
+          source list               List all source files
         """)
     }
 
@@ -196,6 +221,8 @@ default:
       mapping list                    List all mappings
       mapping create <name>           Create new mapping
       mapping activate <name>         Activate a mapping
+
+      source list                     List source files
 
       accounts                        List accounts
       tx [limit]                      List transactions (default: 10)

@@ -31,6 +31,9 @@ final class Mapping {
     @Relationship(deleteRule: .cascade, inverse: \Transaction.mapping)
     var transactions: [Transaction]
 
+    @Relationship(deleteRule: .nullify)
+    var sourceFiles: [RawFile]
+
     init(name: String) {
         self.id = UUID()
         self.name = name
@@ -38,6 +41,7 @@ final class Mapping {
         self.updatedAt = Date()
         self.status = .inProgress
         self.transactions = []
+        self.sourceFiles = []
     }
 
     /// Create a new mapping by copying another
@@ -48,6 +52,7 @@ final class Mapping {
         self.updatedAt = Date()
         self.status = .inProgress
         self.transactions = []
+        self.sourceFiles = []
         self.account = existing.account
     }
 }
