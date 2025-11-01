@@ -1266,6 +1266,59 @@ case "unbalanced":
     }
     print()
 
+case "reset":
+    print("⚠️  This will delete all transactions, mappings, and source files.")
+    print("   Accounts will be preserved.")
+    print("")
+    print("Are you sure? Type 'yes' to confirm: ", terminator: "")
+
+    guard let input = readLine(), input.lowercased() == "yes" else {
+        print("Cancelled")
+        break
+    }
+
+    // Delete all transactions
+    let transactions = try! context.fetch(FetchDescriptor<Transaction>())
+    for tx in transactions {
+        context.delete(tx)
+    }
+
+    // Delete all mappings
+    let mappings = try! context.fetch(FetchDescriptor<Mapping>())
+    for mapping in mappings {
+        context.delete(mapping)
+    }
+
+    // Delete all source files and rows
+    let files = try! context.fetch(FetchDescriptor<RawFile>())
+    for file in files {
+        context.delete(file)
+    }
+
+    // Delete all journal entries (orphaned)
+    let entries = try! context.fetch(FetchDescriptor<JournalEntry>())
+    for entry in entries {
+        context.delete(entry)
+    }
+
+    // Delete all source rows (orphaned)
+    let rows = try! context.fetch(FetchDescriptor<SourceRow>())
+    for row in rows {
+        context.delete(row)
+    }
+
+    // Delete all assets
+    let assets = try! context.fetch(FetchDescriptor<Asset>())
+    for asset in assets {
+        context.delete(asset)
+    }
+
+    try! context.save()
+
+    print("✓ Reset complete")
+    print("  Deleted: \(transactions.count) transactions, \(mappings.count) mappings, \(files.count) files, \(assets.count) assets")
+    print("  Preserved: Accounts, Institutions, Parse Plans")
+
 case "stats":
     let accountCount = try! context.fetchCount(FetchDescriptor<Account>())
     let txCount = try! context.fetchCount(FetchDescriptor<Transaction>())
@@ -1572,6 +1625,8 @@ default:
       query [--positions]             Query/filter transactions
                                       [--asset <name>] [--category <path>]
                                       [--from <date>] [--to <date>]
+
+      reset                           Delete all transactions/mappings (preserves accounts)
 
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
