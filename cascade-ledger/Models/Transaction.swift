@@ -142,6 +142,37 @@ final class Transaction {
             }
     }
 
+    // MARK: - Category Helpers
+
+    /// Split hierarchical category into levels
+    /// Example: "investment/equity/tech" → ["investment", "equity", "tech"]
+    var categoryLevels: [String] {
+        userCategory?.split(separator: "/").map(String.init) ?? []
+    }
+
+    /// Get category at specific level (0-indexed)
+    func categoryAt(level: Int) -> String? {
+        guard level < categoryLevels.count else { return nil }
+        return categoryLevels[level]
+    }
+
+    /// Primary category (level 0)
+    var categoryL1: String? {
+        categoryLevels.first
+    }
+
+    /// Secondary category (level 1)
+    var categoryL2: String? {
+        categoryLevels.count > 1 ? categoryLevels[1] : nil
+    }
+
+    /// Check if transaction matches category path (supports partial matching)
+    /// Example: matchesCategory("investment") matches "investment/equity/tech"
+    func matchesCategory(_ path: String) -> Bool {
+        guard let category = userCategory else { return false }
+        return category.hasPrefix(path)
+    }
+
     /// Get the primary asset involved (if any)
     var primaryAsset: Asset? {
         journalEntries

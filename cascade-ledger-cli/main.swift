@@ -499,9 +499,10 @@ case "transaction":
     case "create":
         // Parse required args
         guard CommandLine.arguments.count >= 4 else {
-            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>]")
+            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>] [--category <path>]")
             print("Entries format: \"AccountName:DR:Amount,AccountName:CR:Amount\"")
-            print("Example: --entries \"Cash:DR:100.50,Revenue:CR:100.50\"")
+            print("Category format: \"primary/secondary/tertiary\" (e.g., \"investment/equity/tech\")")
+            print("Example: --entries \"Cash:DR:100.50,Revenue:CR:100.50\" --category \"income/payroll\"")
             break
         }
 
@@ -510,6 +511,7 @@ case "transaction":
         var description: String?
         var mappingName: String?
         var entriesSpec: String?
+        var category: String?
 
         var i = 3
         while i < CommandLine.arguments.count {
@@ -529,6 +531,9 @@ case "transaction":
                 i += 2
             } else if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
                 mappingName = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--category" && i + 1 < CommandLine.arguments.count {
+                category = CommandLine.arguments[i + 1]
                 i += 2
             } else {
                 i += 1
@@ -596,6 +601,7 @@ case "transaction":
             account: account
         )
         transaction.mapping = mapping
+        transaction.userCategory = category  // Set hierarchical category
 
         // Set reported balance from last source row's balance field
         if let lastRow = sourceRows.sorted(by: { $0.rowNumber > $1.rowNumber }).first {
@@ -636,6 +642,9 @@ case "transaction":
 
         print("✓ Created transaction '\(description)'")
         print("  Date: \(txDate.formatted(date: .numeric, time: .omitted))")
+        if let cat = category {
+            print("  Category: \(cat)")
+        }
         print("  Journal entries: \(parsedEntries.count)")
         for entry in parsedEntries {
             print("    \(entry.accountName): $\(entry.amount) \(entry.side)")
@@ -1047,6 +1056,21 @@ case "validate":
     print("  Transactions with balance data: \(transactions.filter { $0.csvBalance != nil }.count)/\(transactions.count)")
     print("  Balance discrepancies: \(discrepancies.count)")
 
+    // Category coverage
+    let categorized = transactions.filter { $0.userCategory != nil }
+    let uncategorized = transactions.filter { $0.userCategory == nil }
+
+    print("\n🏷️  Category Coverage:")
+    print("  Categorized: \(categorized.count)/\(transactions.count) (\(transactions.count > 0 ? String(format: "%.1f", Double(categorized.count) / Double(transactions.count) * 100) : "0")%)")
+    print("  Uncategorized: \(uncategorized.count)")
+
+    if !uncategorized.isEmpty && uncategorized.count <= 10 {
+        print("\n  Uncategorized transactions:")
+        for tx in uncategorized.prefix(10) {
+            print("    • \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
+        }
+    }
+
     if !discrepancies.isEmpty {
         print("\n  Discrepancies found:")
         for (tx, reported, derived, diff) in discrepancies.prefix(10) {
@@ -1221,6 +1245,7 @@ case "query":
     // Parse filters
     var assetFilters: [String] = []
     var accountFilter: String?
+    var categoryFilter: String?
     var startDate: Date?
     var endDate: Date?
     var outputMode = "transactions" // default
@@ -1235,6 +1260,9 @@ case "query":
             i += 2
         } else if CommandLine.arguments[i] == "--account" && i + 1 < CommandLine.arguments.count {
             accountFilter = CommandLine.arguments[i + 1]
+            i += 2
+        } else if CommandLine.arguments[i] == "--category" && i + 1 < CommandLine.arguments.count {
+            categoryFilter = CommandLine.arguments[i + 1]
             i += 2
         } else if CommandLine.arguments[i] == "--from" && i + 1 < CommandLine.arguments.count {
             let dateFormatter = DateFormatter()
@@ -1283,6 +1311,12 @@ case "query":
             tx.journalEntries.contains { entry in
                 assetFilters.contains(entry.accountName)
             }
+        }
+    }
+
+    if let category = categoryFilter {
+        allTransactions = allTransactions.filter { tx in
+            tx.matchesCategory(category)
         }
     }
 
@@ -1351,6 +1385,9 @@ case "query":
         } else {
             for tx in allTransactions.reversed() { // Show newest first
                 print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
+                if let cat = tx.userCategory {
+                    print("    Category: \(cat)")
+                }
 
                 // Journal entries (minimal)
                 for entry in tx.journalEntries {
@@ -1387,13 +1424,17 @@ case "query":
           --asset <name>              Single asset (SPY, QQQ, etc.)
           --assets <list>             Multiple assets (SPY,QQQ,NVDA)
           --account <name>            Filter by account
+          --category <path>           Filter by category (supports partial match)
           --from <MM/dd/yyyy>         Start date
           --to <MM/dd/yyyy>           End date
 
         Examples:
           cascade query --asset SPY
+          cascade query --category investment
+          cascade query --category investment/equity
           cascade query --positions --assets SPY,QQQ
           cascade query --asset SPY --from "05/01/2024" --to "05/31/2024"
+          cascade query --category income --from "01/01/2024"
         """)
     }
 
