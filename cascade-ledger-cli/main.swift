@@ -615,13 +615,35 @@ case "transaction":
             // Extract quantity for non-Cash assets from source rows
             var quantity: Decimal?
             var quantityUnit: String?
+            var asset: Asset?
 
             if entry.accountName != "Cash" {
                 // Get quantity from first source row
                 if let firstRow = sourceRows.first {
                     quantity = firstRow.mappedData.quantity
-                    // Use account name as unit (e.g., "shares")
                     quantityUnit = "shares"
+                }
+
+                // Only create Asset for securities (have quantity > 0)
+                // Don't create Assets for income/expense/transfer accounts
+                if let qty = quantity, qty > 0 {
+                    let symbolToFind = entry.accountName
+                    let assetDesc = FetchDescriptor<Asset>(
+                        predicate: #Predicate { $0.symbol == symbolToFind }
+                    )
+                    if let existingAsset = try? context.fetch(assetDesc).first {
+                        asset = existingAsset
+                    } else {
+                        // Create new Asset only for securities (exclude income/expense accounts)
+                        let excludePatterns = ["Dividend", "Transfer", "Payroll", "Wire", "Check", "Venmo", "EFT", "Margin", "Expense", "Interest"]
+                        let shouldCreateAsset = !excludePatterns.contains { symbolToFind.contains($0) }
+
+                        if shouldCreateAsset {
+                            let newAsset = Asset(symbol: symbolToFind, name: symbolToFind)
+                            context.insert(newAsset)
+                            asset = newAsset
+                        }
+                    }
                 }
             }
 
@@ -634,6 +656,7 @@ case "transaction":
                 quantityUnit: quantityUnit,
                 transaction: transaction
             )
+            journalEntry.asset = asset
             journalEntry.sourceRows = sourceRows
             context.insert(journalEntry)
         }
@@ -1359,41 +1382,93 @@ case "query":
         }
         print(String(repeating: "=", count: 80))
 
-        // Calculate positions by asset
-        var positions: [String: (quantity: Decimal, txCount: Int)] = [:]
+        // Calculate positions by asset (only real holdings)
+        var securityPositions: [String: (quantity: Decimal, txCount: Int)] = [:]
+        var cashPosition: Decimal = 0
+        var cashTxCount = 0
+
+        // Securities that should be tracked as positions (not income/expense/transfer accounts)
+        let knownSecurities = ["SPY", "QQQ", "NVDA", "FBTC", "GLD", "SPAXX", "FXAIX", "VOO", "VXUS", "VTI"]
+        let excludeSuffixes = ["-Dividend", "-Transfer", "-Interest", "-Out"]
 
         for tx in allTransactions {
-            for entry in tx.journalEntries where entry.accountName != "Cash" {
-                if assetFilters.isEmpty || assetFilters.contains(entry.accountName) {
-                    let current = positions[entry.accountName] ?? (quantity: 0, txCount: 0)
-                    var newQuantity = current.quantity
+            for entry in tx.journalEntries {
+                // Securities positions (use Asset link if available, otherwise accountName for known securities)
+                if let asset = entry.asset, let qty = entry.quantity {
+                    let symbol = asset.symbol
+                    if assetFilters.isEmpty || assetFilters.contains(symbol) {
+                        let current = securityPositions[symbol] ?? (quantity: 0, txCount: 0)
+                        var newQuantity = current.quantity
 
-                    if let qty = entry.quantity {
                         if entry.debitAmount != nil {
-                            newQuantity += qty // Buy
+                            newQuantity += qty // Buy/receive
                         } else {
-                            newQuantity -= qty // Sell
+                            newQuantity -= qty // Sell/deliver
+                        }
+
+                        securityPositions[symbol] = (quantity: newQuantity, txCount: current.txCount + 1)
+                    }
+                } else if let qty = entry.quantity, qty > 0 {
+                    // Fallback: Check if accountName is a known security
+                    let accountName = entry.accountName
+                    let isExcluded = excludeSuffixes.contains { accountName.hasSuffix($0) }
+                    let isKnownSecurity = knownSecurities.contains(accountName)
+
+                    if !isExcluded && isKnownSecurity && accountName != "Cash" {
+                        if assetFilters.isEmpty || assetFilters.contains(accountName) {
+                            let current = securityPositions[accountName] ?? (quantity: 0, txCount: 0)
+                            var newQuantity = current.quantity
+
+                            if entry.debitAmount != nil {
+                                newQuantity += qty
+                            } else {
+                                newQuantity -= qty
+                            }
+
+                            securityPositions[accountName] = (quantity: newQuantity, txCount: current.txCount + 1)
                         }
                     }
+                }
 
-                    positions[entry.accountName] = (quantity: newQuantity, txCount: current.txCount + 1)
+                // Cash position (USD)
+                if entry.accountName == "Cash" {
+                    if assetFilters.isEmpty || assetFilters.contains("USD") || assetFilters.contains("Cash") {
+                        if let debit = entry.debitAmount {
+                            cashPosition += debit
+                            cashTxCount += 1
+                        }
+                        if let credit = entry.creditAmount {
+                            cashPosition -= credit
+                        }
+                    }
                 }
             }
         }
 
-        if positions.isEmpty {
+        if securityPositions.isEmpty && cashPosition == 0 {
             print("  No positions found")
         } else {
-            print("\nAsset           Quantity        Transactions")
-            print(String(repeating: "─", count: 50))
-            for (asset, data) in positions.sorted(by: { $0.key < $1.key }) {
-                let qtyNum = (data.quantity as NSDecimalNumber).doubleValue
-                let assetPadded = asset.padding(toLength: 15, withPad: " ", startingAt: 0)
-                let qtyStr = String(format: "%.3f", qtyNum).padding(toLength: 12, withPad: " ", startingAt: 0)
-                print("  \(assetPadded) \(qtyStr) shares    \(data.txCount)")
+            print("\nAsset           Quantity            Unit        Transactions")
+            print(String(repeating: "─", count: 70))
+
+            // Show Cash/USD first
+            if assetFilters.isEmpty || assetFilters.contains("USD") || assetFilters.contains("Cash") {
+                let cashNum = (cashPosition as NSDecimalNumber).doubleValue
+                let assetPadded = "Cash (USD)".padding(toLength: 15, withPad: " ", startingAt: 0)
+                let qtyStr = String(format: "%.2f", cashNum).padding(toLength: 16, withPad: " ", startingAt: 0)
+                print("  \(assetPadded) \(qtyStr)  USD           \(cashTxCount)")
             }
-            print(String(repeating: "─", count: 50))
-            print("Total assets: \(positions.count)")
+
+            // Show securities
+            for (symbol, data) in securityPositions.sorted(by: { $0.key < $1.key }) {
+                let qtyNum = (data.quantity as NSDecimalNumber).doubleValue
+                let assetPadded = symbol.padding(toLength: 15, withPad: " ", startingAt: 0)
+                let qtyStr = String(format: "%.3f", qtyNum).padding(toLength: 16, withPad: " ", startingAt: 0)
+                print("  \(assetPadded) \(qtyStr)  shares        \(data.txCount)")
+            }
+
+            print(String(repeating: "─", count: 70))
+            print("Total holdings: \(securityPositions.count + (cashPosition != 0 ? 1 : 0)) assets")
         }
         print()
 
