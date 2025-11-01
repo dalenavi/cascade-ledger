@@ -10,7 +10,6 @@
 		F82589D92EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
 		F82589E32EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
 		F82589E42EB28162009BBB3C /* cascade_ledger_models.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		F8258A092EB281A5009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -159,7 +158,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F8258A092EB281A5009BBB3C /* cascade_ledger_models.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

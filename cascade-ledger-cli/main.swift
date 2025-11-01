@@ -7,7 +7,6 @@
 
 import Foundation
 import SwiftData
-import cascade_ledger_models
 
 print("Starting CLI...")
 
