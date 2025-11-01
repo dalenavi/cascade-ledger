@@ -559,10 +559,195 @@ case "transaction":
             print("  Coverage: \(mapped.count)/\(allRows.count) (\(String(format: "%.1f", coverage))%)")
         }
 
+    case "list":
+        var mappingName: String?
+        var sourceFileName: String?
+
+        var i = 3
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
+                mappingName = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--source-file" && i + 1 < CommandLine.arguments.count {
+                sourceFileName = CommandLine.arguments[i + 1]
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        var transactions: [Transaction] = []
+
+        if let mapName = mappingName {
+            let mappingDesc = FetchDescriptor<Mapping>(
+                predicate: #Predicate { $0.name == mapName }
+            )
+            if let mapping = try? context.fetch(mappingDesc).first {
+                transactions = mapping.transactions
+            }
+        } else if let fileName = sourceFileName {
+            let fileDesc = FetchDescriptor<RawFile>(
+                predicate: #Predicate { $0.fileName == fileName }
+            )
+            if let file = try? context.fetch(fileDesc).first {
+                let rowTxs = file.sourceRows.flatMap { $0.journalEntries.compactMap { $0.transaction } }
+                transactions = Array(Set(rowTxs))
+            }
+        } else {
+            transactions = try! context.fetch(FetchDescriptor<Transaction>(
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            ))
+        }
+
+        print("\n💰 TRANSACTIONS:")
+        print(String(repeating: "=", count: 80))
+        if transactions.isEmpty {
+            print("  No transactions found")
+        }
+
+        for tx in transactions.sorted(by: { $0.date > $1.date }) {
+            print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
+            print("    ID: \(tx.id)")
+            print("    Type: \(tx.transactionType.rawValue)")
+            print("    Amount: $\(tx.journalEntries.compactMap { $0.debitAmount ?? $0.creditAmount }.reduce(0, +) / 2)")
+            print("    Balanced: \(tx.isBalanced ? "✅" : "❌")")
+
+            // Show source rows
+            let sourceRows = Set(tx.journalEntries.flatMap { $0.sourceRows })
+            if !sourceRows.isEmpty {
+                let rowNums = sourceRows.map { $0.rowNumber }.sorted()
+                print("    Source rows: \(rowNums.map(String.init).joined(separator: ", "))")
+            }
+        }
+        print()
+
+    case "update":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]")
+            break
+        }
+
+        let txId = CommandLine.arguments[3]
+        var linkRows: [Int] = []
+        var unlinkRows: [Int] = []
+
+        var i = 4
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--link-rows" && i + 1 < CommandLine.arguments.count {
+                linkRows = parseRowNumbers(CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--unlink-rows" && i + 1 < CommandLine.arguments.count {
+                unlinkRows = parseRowNumbers(CommandLine.arguments[i + 1])
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        // Find transaction by ID
+        guard let txUUID = UUID(uuidString: txId) else {
+            print("Error: Invalid transaction ID")
+            break
+        }
+
+        let txDesc = FetchDescriptor<Transaction>(
+            predicate: #Predicate { $0.id == txUUID }
+        )
+        guard let transaction = try? context.fetch(txDesc).first else {
+            print("Error: Transaction not found")
+            break
+        }
+
+        // Link new rows
+        if !linkRows.isEmpty {
+            let rowsDesc = FetchDescriptor<SourceRow>(
+                predicate: #Predicate { linkRows.contains($0.globalRowNumber) }
+            )
+            let sourceRows = try! context.fetch(rowsDesc)
+
+            // Add to first journal entry (simple approach)
+            if let firstEntry = transaction.journalEntries.first {
+                firstEntry.sourceRows.append(contentsOf: sourceRows)
+            }
+        }
+
+        // Unlink rows
+        if !unlinkRows.isEmpty {
+            for entry in transaction.journalEntries {
+                entry.sourceRows.removeAll { unlinkRows.contains($0.globalRowNumber) }
+            }
+        }
+
+        try! context.save()
+
+        print("✓ Updated transaction '\(transaction.transactionDescription)'")
+        if !linkRows.isEmpty {
+            print("  Linked rows: \(linkRows.sorted().map(String.init).joined(separator: ", "))")
+        }
+        if !unlinkRows.isEmpty {
+            print("  Unlinked rows: \(unlinkRows.sorted().map(String.init).joined(separator: ", "))")
+        }
+
+        // Show updated source rows
+        let sourceRows = Set(transaction.journalEntries.flatMap { $0.sourceRows })
+        print("  Current source rows: \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+
+    case "show":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade transaction show <id>")
+            break
+        }
+
+        let txId = CommandLine.arguments[3]
+        guard let txUUID = UUID(uuidString: txId) else {
+            print("Error: Invalid transaction ID")
+            break
+        }
+
+        let txDesc = FetchDescriptor<Transaction>(
+            predicate: #Predicate { $0.id == txUUID }
+        )
+        guard let transaction = try? context.fetch(txDesc).first else {
+            print("Error: Transaction not found")
+            break
+        }
+
+        print("\n💰 TRANSACTION DETAILS:")
+        print(String(repeating: "=", count: 80))
+        print("\n  ID: \(transaction.id)")
+        print("  Date: \(transaction.date.formatted(date: .long, time: .omitted))")
+        print("  Description: \(transaction.transactionDescription)")
+        print("  Type: \(transaction.transactionType.rawValue)")
+        print("  Balanced: \(transaction.isBalanced ? "✅" : "❌")")
+
+        print("\n  Journal Entries:")
+        for entry in transaction.journalEntries {
+            let amount = entry.debitAmount ?? entry.creditAmount ?? 0
+            let side = entry.debitAmount != nil ? "DR" : "CR"
+            print("    \(entry.accountName): $\(amount) \(side)")
+            if !entry.sourceRows.isEmpty {
+                print("      Source rows: \(entry.sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+            }
+        }
+
+        let sourceRows = Set(transaction.journalEntries.flatMap { $0.sourceRows })
+        if !sourceRows.isEmpty {
+            print("\n  Source Rows (\(sourceRows.count)):")
+            for row in sourceRows.sorted(by: { $0.rowNumber < $1.rowNumber }) {
+                if let rawDict = try? JSONDecoder().decode([String: String].self, from: row.rawDataJSON) {
+                    print("    Row \(row.rowNumber): \(rawDict["Description"] ?? "N/A")")
+                }
+            }
+        }
+        print()
+
     default:
         print("""
         Transaction commands:
           transaction create --from-rows <rows> --type <type> --description <desc> [--mapping <name>]
+          transaction list [--mapping <name>] [--source-file <file>]
+          transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]
+          transaction show <id>
         """)
     }
 
@@ -855,7 +1040,9 @@ default:
       rows <file>                     View source rows [--range 1-10]
 
       transaction create              Create transaction from rows
-                                      [--from-rows <rows> --type <type> --description <desc>]
+      transaction list                List transactions [--mapping <name>]
+      transaction update <id>         Update row links [--link-rows/--unlink-rows]
+      transaction show <id>           Show transaction details
 
       validate [<mapping>]            Validate mapping (coverage, balance, duplicates)
       coverage [<mapping>]            Show coverage report [--detailed]
