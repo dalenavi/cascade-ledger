@@ -652,7 +652,18 @@ case "transaction":
             print("  No transactions found")
         }
 
-        for tx in transactions.sorted(by: { $0.date > $1.date }) {
+        // Sort by date, then by minimum source row number for deterministic ordering
+        for tx in transactions.sorted(by: { tx1, tx2 in
+            if tx1.date != tx2.date {
+                return tx1.date > tx2.date
+            }
+            // Same date - sort by source row number
+            let rows1 = Set(tx1.journalEntries.flatMap { $0.sourceRows })
+            let rows2 = Set(tx2.journalEntries.flatMap { $0.sourceRows })
+            let minRow1 = rows1.map { $0.rowNumber }.min() ?? Int.max
+            let minRow2 = rows2.map { $0.rowNumber }.min() ?? Int.max
+            return minRow1 > minRow2
+        }) {
             print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
             print("    ID: \(tx.id)")
             print("    Type: \(tx.transactionType.rawValue)")
