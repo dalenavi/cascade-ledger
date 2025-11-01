@@ -1271,8 +1271,8 @@ case "reset":
     let hasYesFlag = CommandLine.arguments.contains("--yes")
 
     if !hasYesFlag {
-        print("⚠️  This will delete all transactions, mappings, and source files.")
-        print("   Accounts will be preserved.")
+        print("⚠️  This will delete the entire database and recreate it.")
+        print("   The GUI must be restarted after running this.")
         print("")
         print("Usage: cascade reset --yes")
         print("")
@@ -1280,55 +1280,34 @@ case "reset":
         break
     }
 
-    // Count before deletion
-    let transactionCount = try! context.fetchCount(FetchDescriptor<Transaction>())
-    let mappingCount = try! context.fetchCount(FetchDescriptor<Mapping>())
-    let fileCount = try! context.fetchCount(FetchDescriptor<RawFile>())
-    let assetCount = try! context.fetchCount(FetchDescriptor<Asset>())
+    print("Deleting database...")
 
-    // Delete in correct order (children before parents due to relationships)
+    // Close the context (we're about to delete the file)
+    // Can't delete within SwiftData due to relationship constraints
+    // Just delete the database file directly
 
-    // 1. Delete journal entries first (they reference transactions and source rows)
-    let entries = try! context.fetch(FetchDescriptor<JournalEntry>())
-    for entry in entries {
-        context.delete(entry)
+    let dbPath = dbURL.path
+    let shmPath = dbPath + "-shm"
+    let walPath = dbPath + "-wal"
+
+    do {
+        if FileManager.default.fileExists(atPath: dbPath) {
+            try FileManager.default.removeItem(atPath: dbPath)
+        }
+        if FileManager.default.fileExists(atPath: shmPath) {
+            try FileManager.default.removeItem(atPath: shmPath)
+        }
+        if FileManager.default.fileExists(atPath: walPath) {
+            try FileManager.default.removeItem(atPath: walPath)
+        }
+
+        print("✓ Database deleted")
+        print("")
+        print("⚠️  IMPORTANT: Restart the GUI app now")
+        print("   The GUI will create a fresh database on next launch")
+    } catch {
+        print("Error deleting database: \(error)")
     }
-
-    // 2. Delete transactions (they reference mappings and accounts)
-    let transactions = try! context.fetch(FetchDescriptor<Transaction>())
-    for tx in transactions {
-        context.delete(tx)
-    }
-
-    // 3. Delete source rows (they reference files)
-    let rows = try! context.fetch(FetchDescriptor<SourceRow>())
-    for row in rows {
-        context.delete(row)
-    }
-
-    // 4. Delete mappings (they reference accounts and files)
-    let mappings = try! context.fetch(FetchDescriptor<Mapping>())
-    for mapping in mappings {
-        context.delete(mapping)
-    }
-
-    // 5. Delete files (now no references)
-    let files = try! context.fetch(FetchDescriptor<RawFile>())
-    for file in files {
-        context.delete(file)
-    }
-
-    // 6. Delete assets (they reference journal entries)
-    let assets = try! context.fetch(FetchDescriptor<Asset>())
-    for asset in assets {
-        context.delete(asset)
-    }
-
-    try! context.save()
-
-    print("✓ Reset complete")
-    print("  Deleted: \(transactionCount) transactions, \(mappingCount) mappings, \(fileCount) files, \(assetCount) assets")
-    print("  Preserved: Accounts, Institutions, Parse Plans")
 
 case "stats":
     let accountCount = try! context.fetchCount(FetchDescriptor<Account>())
