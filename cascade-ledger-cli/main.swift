@@ -269,6 +269,83 @@ case "source":
         """)
     }
 
+case "rows":
+    guard CommandLine.arguments.count >= 3 else {
+        print("Usage: cascade rows <file> [--range START-END] [--show-transactions]")
+        break
+    }
+    let fileName = CommandLine.arguments[2]
+
+    // Parse optional flags
+    var rangeStart = 1
+    var rangeEnd: Int?
+    var showTransactions = false
+
+    var i = 3
+    while i < CommandLine.arguments.count {
+        if CommandLine.arguments[i] == "--range" && i + 1 < CommandLine.arguments.count {
+            let rangeStr = CommandLine.arguments[i + 1]
+            let parts = rangeStr.split(separator: "-")
+            if parts.count == 2 {
+                rangeStart = Int(parts[0]) ?? 1
+                rangeEnd = Int(parts[1])
+            }
+            i += 2
+        } else if CommandLine.arguments[i] == "--show-transactions" {
+            showTransactions = true
+            i += 1
+        } else {
+            i += 1
+        }
+    }
+
+    // Find the file
+    let fileDesc = FetchDescriptor<RawFile>(
+        predicate: #Predicate { $0.fileName == fileName }
+    )
+    guard let rawFile = try? context.fetch(fileDesc).first else {
+        print("Error: File '\(fileName)' not found")
+        print("Use 'cascade source list' to see available files")
+        break
+    }
+
+    // Get rows in range
+    let allRows = rawFile.sourceRows.sorted { $0.rowNumber < $1.rowNumber }
+    let endIndex = rangeEnd ?? allRows.count
+    let rowsToShow = allRows.filter { $0.rowNumber >= rangeStart && $0.rowNumber <= endIndex }
+
+    print("\n📄 ROWS from \(fileName) (rows \(rangeStart)-\(endIndex)):")
+    print(String(repeating: "=", count: 80))
+
+    for row in rowsToShow {
+        // Decode raw data
+        if let rawDict = try? JSONDecoder().decode([String: String].self, from: row.rawDataJSON) {
+            let isMapped = !row.journalEntries.isEmpty
+            let status = isMapped ? "✓" : "○"
+
+            print("\n  \(status) Row \(row.rowNumber):")
+            for (key, value) in rawDict.sorted(by: { $0.key < $1.key }) {
+                print("    \(key): \(value)")
+            }
+
+            if showTransactions && !row.journalEntries.isEmpty {
+                let transactions = Set(row.journalEntries.compactMap { $0.transaction })
+                print("    → Mapped to \(transactions.count) transaction(s):")
+                for tx in transactions {
+                    print("      • \(tx.transactionDescription) (\(tx.transactionType.rawValue))")
+                }
+            }
+        }
+    }
+
+    let totalRows = allRows.count
+    let mappedRows = allRows.filter { !$0.journalEntries.isEmpty }.count
+    let coverage = totalRows > 0 ? Double(mappedRows) / Double(totalRows) * 100 : 0
+
+    print("\n" + String(repeating: "=", count: 80))
+    print("Coverage: \(mappedRows)/\(totalRows) rows mapped (\(String(format: "%.1f", coverage))%)")
+    print()
+
 case "account":
     switch subcommand {
     case "list":
@@ -431,6 +508,9 @@ default:
       mapping activate <name>         Activate a mapping
 
       source list                     List source files
+      source add <file>               Add CSV file [--mapping <name>]
+
+      rows <file>                     View source rows [--range 1-10]
 
       accounts                        List accounts (alias)
       tx [limit]                      List transactions (default: 10)
@@ -440,8 +520,9 @@ default:
     Examples:
       ./cascade account create "Fidelity" --institution "Fidelity Investments"
       ./cascade mapping create "v1" --account "Fidelity"
-      ./cascade mapping list
-      ./cascade account list
+      ./cascade source add data.csv --mapping "v1"
+      ./cascade rows data.csv --range 1-10
+      ./cascade rows data.csv --show-transactions
       ./cascade tx 20
 
     Features:
