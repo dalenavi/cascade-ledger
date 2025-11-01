@@ -96,7 +96,7 @@ struct MainView: View {
                     session: parseStudioSession
                 )
             case "transactions":
-                TransactionsView(selectedAccount: selectedAccount)
+                TransactionsListView()
             case "timeline":
                 TransactionTimelineView(selectedAccount: selectedAccount)
             case "analytics":
