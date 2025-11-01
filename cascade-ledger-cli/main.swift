@@ -1267,47 +1267,58 @@ case "unbalanced":
     print()
 
 case "reset":
-    print("⚠️  This will delete all transactions, mappings, and source files.")
-    print("   Accounts will be preserved.")
-    print("")
-    print("Are you sure? Type 'yes' to confirm: ", terminator: "")
+    // Check for --yes flag
+    let hasYesFlag = CommandLine.arguments.contains("--yes")
 
-    guard let input = readLine(), input.lowercased() == "yes" else {
-        print("Cancelled")
+    if !hasYesFlag {
+        print("⚠️  This will delete all transactions, mappings, and source files.")
+        print("   Accounts will be preserved.")
+        print("")
+        print("Usage: cascade reset --yes")
+        print("")
+        print("This is a destructive operation. Use --yes to confirm.")
         break
     }
 
-    // Delete all transactions
-    let transactions = try! context.fetch(FetchDescriptor<Transaction>())
-    for tx in transactions {
-        context.delete(tx)
-    }
+    // Count before deletion
+    let transactionCount = try! context.fetchCount(FetchDescriptor<Transaction>())
+    let mappingCount = try! context.fetchCount(FetchDescriptor<Mapping>())
+    let fileCount = try! context.fetchCount(FetchDescriptor<RawFile>())
+    let assetCount = try! context.fetchCount(FetchDescriptor<Asset>())
 
-    // Delete all mappings
-    let mappings = try! context.fetch(FetchDescriptor<Mapping>())
-    for mapping in mappings {
-        context.delete(mapping)
-    }
+    // Delete in correct order (children before parents due to relationships)
 
-    // Delete all source files and rows
-    let files = try! context.fetch(FetchDescriptor<RawFile>())
-    for file in files {
-        context.delete(file)
-    }
-
-    // Delete all journal entries (orphaned)
+    // 1. Delete journal entries first (they reference transactions and source rows)
     let entries = try! context.fetch(FetchDescriptor<JournalEntry>())
     for entry in entries {
         context.delete(entry)
     }
 
-    // Delete all source rows (orphaned)
+    // 2. Delete transactions (they reference mappings and accounts)
+    let transactions = try! context.fetch(FetchDescriptor<Transaction>())
+    for tx in transactions {
+        context.delete(tx)
+    }
+
+    // 3. Delete source rows (they reference files)
     let rows = try! context.fetch(FetchDescriptor<SourceRow>())
     for row in rows {
         context.delete(row)
     }
 
-    // Delete all assets
+    // 4. Delete mappings (they reference accounts and files)
+    let mappings = try! context.fetch(FetchDescriptor<Mapping>())
+    for mapping in mappings {
+        context.delete(mapping)
+    }
+
+    // 5. Delete files (now no references)
+    let files = try! context.fetch(FetchDescriptor<RawFile>())
+    for file in files {
+        context.delete(file)
+    }
+
+    // 6. Delete assets (they reference journal entries)
     let assets = try! context.fetch(FetchDescriptor<Asset>())
     for asset in assets {
         context.delete(asset)
@@ -1316,7 +1327,7 @@ case "reset":
     try! context.save()
 
     print("✓ Reset complete")
-    print("  Deleted: \(transactions.count) transactions, \(mappings.count) mappings, \(files.count) files, \(assets.count) assets")
+    print("  Deleted: \(transactionCount) transactions, \(mappingCount) mappings, \(fileCount) files, \(assetCount) assets")
     print("  Preserved: Accounts, Institutions, Parse Plans")
 
 case "stats":
