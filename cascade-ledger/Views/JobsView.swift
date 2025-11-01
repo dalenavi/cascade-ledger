@@ -168,24 +168,12 @@ struct JobRow: View {
                     }
                 }
 
-                if !job.status.isTerminal {
-                    Button(action: {
-                        Task { await jobManager.cancelJob(id: job.id) }
-                    }) {
-                        Label("Cancel", systemImage: "xmark.circle")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-
-                if job.status.isTerminal {
-                    Button(action: {
-                        jobManager.deleteJob(id: job.id)
-                    }) {
-                        Label("Delete", systemImage: "trash")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
+                Button(action: {
+                    jobManager.deleteJob(id: job.id)
+                }) {
+                    Label("Delete", systemImage: "trash")
+                        .font(.caption)
+                        .foregroundColor(.red)
                 }
             }
         }

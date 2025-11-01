@@ -1,0 +1,26 @@
+# Xcode user-specific files
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+project.xcworkspace/xcuserdata/
+
+# Build outputs
+.build/
+.swiftpm/
+build/
+DerivedData/
+
+# Temporary/scratch files
+*.md
+!README.md
+*.sh
+cascade-query
+cascade-query.swift
+run-cascade-cli.swift
+test-cli.swift
+test-cli.sh
+examples/
+
+# Temporary directories
+cascade-cli-tool/
+cascade-cli/

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Cascade CLI wrapper script
+
+CLI_DIR="/Users/dalenavi/Library/Developer/Xcode/DerivedData/cascade-ledger-cutusmwflwtsdbaewikxjysqhrjj/Build/Products/Debug"
+DYLD_FRAMEWORK_PATH="$CLI_DIR:$DYLD_FRAMEWORK_PATH" exec "$CLI_DIR/cascade-ledger-cli" "$@"

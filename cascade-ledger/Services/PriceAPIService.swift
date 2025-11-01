@@ -87,11 +87,20 @@ class PriceAPIService {
             }
         )
 
-        let entries = try modelContext.fetch(descriptor)
-        let assets = Set(entries.compactMap { $0.assetId })
-            .filter { !$0.isEmpty && $0.trimmingCharacters(in: .whitespaces).count > 0 }
+        let transactions = try modelContext.fetch(descriptor)
 
-        print("Fetching prices for \(assets.count) assets: \(assets.joined(separator: ", "))")
+        // Scan journal entries for all asset account names (not just Asset relationships)
+        var assetNames = Set<String>()
+        for transaction in transactions {
+            for entry in transaction.journalEntries {
+                if entry.accountType == .asset && !entry.accountName.isEmpty {
+                    assetNames.insert(entry.accountName)
+                }
+            }
+        }
+
+        print("Found \(assetNames.count) unique assets in journal entries: \(assetNames.sorted().joined(separator: ", "))")
+        print("Fetching prices for \(assetNames.count) assets...")
 
         var results: [String: Int] = [:]
 
@@ -99,13 +108,13 @@ class PriceAPIService {
         let to = Date()
         let from = Calendar.current.date(byAdding: .year, value: -2, to: to)!
 
-        for asset in assets.sorted() {
+        for assetName in assetNames.sorted() {
             do {
-                let count = try await fetchPricesForAsset(asset, from: from, to: to)
-                results[asset] = count
+                let count = try await fetchPricesForAsset(assetName, from: from, to: to)
+                results[assetName] = count
             } catch {
-                print("Failed to fetch \(asset): \(error)")
-                results[asset] = 0
+                print("Failed to fetch \(assetName): \(error)")
+                results[assetName] = 0
             }
         }
 

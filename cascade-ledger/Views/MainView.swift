@@ -45,6 +45,12 @@ struct MainView: View {
                     Label("Portfolio Value", systemImage: "chart.line.uptrend.xyaxis")
                         .tag("portfolio-value")
 
+                    Label("Asset Allocation", systemImage: "chart.pie")
+                        .tag("allocation")
+
+                    Label("Allocation (Stacked)", systemImage: "chart.bar.xaxis")
+                        .tag("allocation-stacked")
+
                     Label("Total Wealth", systemImage: "chart.bar.xaxis")
                         .tag("total-wealth")
 
@@ -99,6 +105,10 @@ struct MainView: View {
                 PositionsView(selectedAccount: selectedAccount)
             case "portfolio-value":
                 PortfolioValueView(selectedAccount: selectedAccount)
+            case "allocation":
+                AllocationView(selectedAccount: selectedAccount)
+            case "allocation-stacked":
+                AllocationStackedView(selectedAccount: selectedAccount)
             case "total-wealth":
                 TotalWealthView(selectedAccount: selectedAccount)
             case "balance":

@@ -61,6 +61,15 @@ class SourceRowService {
             let rowNumber = index + 1  // 1-based
             let globalRowNumber = Int(row["_globalRowNumber"] ?? "\(rowNumber)") ?? rowNumber
 
+            // Filter by Status field (Cash App specific)
+            if let status = row["Status"]?.uppercased() {
+                if status == "FAILED" || status == "CANCELLED" {
+                    print("  ⏭️  Skipping row #\(globalRowNumber) - Status: \(status)")
+                    continue
+                }
+                // Include: COMPLETE, PENDING, SETTLED, or any other status
+            }
+
             // Map CSV row to standardized format
             guard let mappedData = mapCSVRow(row, using: fieldMapping) else {
                 print("  ⚠️ Skipping row #\(globalRowNumber) - failed to map")
@@ -78,11 +87,6 @@ class SourceRowService {
 
             modelContext.insert(sourceRow)
             sourceRows.append(sourceRow)
-
-            // Log balance extraction
-            if let balance = mappedData.balance {
-                print("  ✓ Row #\(globalRowNumber): balance = \(balance)")
-            }
         }
 
         // Batch save

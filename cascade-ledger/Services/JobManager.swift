@@ -47,66 +47,80 @@ class JobManager {
             throw JobManagerError.notConfigured
         }
 
-        // Insert into SwiftData
+        // Insert job WITHOUT relationships (executor will fetch them)
         context.insert(job)
         try context.save()
 
         // Reload jobs list
         loadJobs()
 
-        // Start execution
+        // CRITICAL: Delay to let SwiftData fully propagate changes to persistent store
+        // This ensures all related objects are fully persisted before executor fetches them
+        // TODO: Replace with proper background context isolation
+        try? await Task.sleep(for: .seconds(1))
+
+        // Start execution (executor will fetch relationships from params)
         await startJob(job)
     }
 
     func startJob(_ job: Job) async {
-        guard let executor = executors[job.type] else {
+        guard let context = modelContext,
+              let executor = executors[job.type] else {
             print("⚠️ No executor registered for job type: \(job.type)")
             return
         }
 
+        // CRITICAL: Refetch job to ensure we have a fresh instance
+        let jobId = job.id
+        let allJobs = (try? context.fetch(FetchDescriptor<Job>())) ?? []
+        guard let freshJob = allJobs.first(where: { $0.id == jobId }) else {
+            print("⚠️ Could not refetch job")
+            return
+        }
+
         // Update status
-        job.status = .running
-        job.startedAt = Date()
-        job.lastUpdateAt = Date()
+        freshJob.status = .running
+        freshJob.startedAt = Date()
+        freshJob.lastUpdateAt = Date()
 
         // Create execution record
-        let execution = JobExecution(attemptNumber: job.executions.count + 1, job: job)
-        job.executions.append(execution)
-        try? modelContext?.save()
+        let execution = JobExecution(attemptNumber: freshJob.executions.count + 1, job: freshJob)
+        freshJob.executions.append(execution)
+        try? context.save()
 
-        print("🚀 Starting job: \(job.title)")
+        print("🚀 Starting job: \(freshJob.title)")
 
         // Start async task
         let task = Task {
             do {
                 try await executor.execute(
-                    job: job,
-                    context: modelContext!,
+                    job: freshJob,
+                    context: context,
                     progressHandler: { [weak self] progress, step in
                         Task { @MainActor in
-                            self?.updateJobProgress(job, progress: progress, step: step)
+                            self?.updateJobProgress(freshJob, progress: progress, step: step)
                         }
                     }
                 )
 
                 // Success
-                await self.completeJob(job, execution: execution)
+                await self.completeJob(freshJob, execution: execution)
 
             } catch let error as JobError {
                 // Handle job-specific errors
-                await self.failJob(job, execution: execution, error: error)
+                await self.failJob(freshJob, execution: execution, error: error)
 
             } catch {
                 // Handle generic errors
                 await self.failJob(
-                    job,
+                    freshJob,
                     execution: execution,
                     error: JobError.unknown(error.localizedDescription)
                 )
             }
         }
 
-        executionTasks[job.id] = task
+        executionTasks[freshJob.id] = task
         loadJobs()
     }
 
@@ -285,9 +299,11 @@ class JobManager {
     private func loadJobs() {
         guard let context = modelContext else { return }
 
-        let descriptor = FetchDescriptor<Job>(
+        var descriptor = FetchDescriptor<Job>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
+        // CRITICAL: Don't load relationships - prevents cross-context issues
+        descriptor.relationshipKeyPathsForPrefetching = []
 
         allJobs = (try? context.fetch(descriptor)) ?? []
         activeJobs = allJobs.filter { !$0.status.isTerminal }
@@ -298,11 +314,31 @@ class JobManager {
     }
 
     func getJobsFor(account: Account) -> [Job] {
-        allJobs.filter { $0.account?.id == account.id }
+        let accountId = account.id
+        return allJobs.filter { job in
+            if let paramsData = job.parametersJSON,
+               let params = try? JSONDecoder().decode(CategorizationJobParameters.self, from: paramsData),
+               params.accountId == accountId {
+                return true
+            }
+            return false
+        }
     }
 
     func getJobsFor(session: CategorizationSession) -> [Job] {
-        allJobs.filter { $0.categorizationSession?.id == session.id }
+        let sessionId = session.id
+        return allJobs.filter { job in
+            if let paramsData = job.parametersJSON,
+               let params = try? JSONDecoder().decode(CategorizationJobParameters.self, from: paramsData),
+               params.sessionId == sessionId {
+                return true
+            }
+            return false
+        }
+    }
+
+    func getJobsWithTag(_ tag: String) -> [Job] {
+        allJobs.filter { $0.tags.contains(tag) }
     }
 }
 

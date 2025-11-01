@@ -23,7 +23,6 @@ struct ParsePlanVersionsPanel: View {
     @State private var showingEditWorkingCopy = false
     @State private var showingAgentOverlay = false
     @State private var agent: AutonomousParseAgent?
-    @State private var currentJobId: UUID?
     @State private var jobManager = JobManager.shared
     @State private var showingErrorAlert = false
     @State private var lastError: CategorizationError?
@@ -60,16 +59,13 @@ struct ParsePlanVersionsPanel: View {
         return formatter
     }
 
-    // Get current job for this session
+    // Get current job for this session (always derived from JobManager state)
     private var currentJob: Job? {
-        guard let jobId = currentJobId else {
-            // Check if there's a job for the selected session
-            if let session = selectedCategorizationSession {
-                return jobManager.getJobsFor(session: session).first { !$0.status.isTerminal }
-            }
-            return nil
+        guard let session = selectedCategorizationSession else { return nil }
+        // Find any non-terminal job for this session with parse-studio tag
+        return jobManager.getJobsFor(session: session).first { job in
+            !job.status.isTerminal && job.tags.contains("parse-studio")
         }
-        return jobManager.getJob(id: jobId)
     }
 
     @ViewBuilder
@@ -174,25 +170,19 @@ struct ParsePlanVersionsPanel: View {
 
                 HStack(spacing: 8) {
                     if !accountBatches.isEmpty {
-                        if let service = directService {
-                            if case .processing = service.status {
-                                Button(action: { service.pause() }) {
+                        if let job = currentJob {
+                            if job.status == .running {
+                                Button(action: {
+                                    Task { await jobManager.pauseJob(id: job.id) }
+                                }) {
                                     Label("Pause", systemImage: "pause.fill")
                                         .font(.caption)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
-                            } else if case .paused = service.status {
+                            } else if job.status == .paused || job.status == .interrupted {
                                 Button(action: activateAgent) {
                                     Label("Resume", systemImage: "play.fill")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .tint(.purple)
-                            } else {
-                                Button(action: activateAgent) {
-                                    Label("Agent", systemImage: "sparkles")
                                         .font(.caption)
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -221,6 +211,10 @@ struct ParsePlanVersionsPanel: View {
                             }
                         } else {
                             // AI Direct mode menu
+                            if let session = selectedCategorizationSession {
+                                Button("Log Session Data", action: { logSessionDataForAgent(session) })
+                                Divider()
+                            }
                             if !account.categorizationSessions.isEmpty {
                                 Button("Clear All Sessions", role: .destructive, action: { showingClearConfirm = true })
                             }
@@ -244,15 +238,18 @@ struct ParsePlanVersionsPanel: View {
                     progress: agent.progress,
                     recentLogs: Array(agent.log.suffix(3).map { ($0.icon, $0.color, $0.message) })
                 )
-            } else if let service = directService, service.status != .idle {
-                DirectServiceProgressBanner(
-                    service: service,
-                    step: service.currentStep,
+            } else if let job = currentJob {
+                JobProgressBanner(
+                    job: job,
                     session: selectedCategorizationSession,
-                    onStop: {
-                        service.pause()
-                        // Mark as stopped (pause + don't resume)
-                        pendingCategorizationData = nil
+                    onPause: {
+                        Task { await jobManager.pauseJob(id: job.id) }
+                    },
+                    onResume: {
+                        Task { await jobManager.resumeJob(id: job.id) }
+                    },
+                    onDelete: {
+                        jobManager.deleteJob(id: job.id)
                     }
                 )
             }
@@ -612,9 +609,6 @@ struct ParsePlanVersionsPanel: View {
             if agent == nil {
                 agent = AutonomousParseAgent(modelContext: modelContext)
             }
-            if directService == nil {
-                directService = DirectCategorizationService(modelContext: modelContext)
-            }
 
             // Auto-select active session if none selected
             if selectedCategorizationSession == nil, let activeSession = account.activeCategorizationSession {
@@ -643,27 +637,6 @@ struct ParsePlanVersionsPanel: View {
                 print("\n🔍 onAppear: Session v\(session.versionNumber) not complete (isComplete: \(session.isComplete))")
             } else {
                 print("\n🔍 onAppear: No session selected")
-            }
-
-            // Start periodic refresh while processing
-            Task { @MainActor in
-                while true {
-                    try? await Task.sleep(for: .milliseconds(500))
-
-                    guard let service = directService else { break }
-
-                    if case .processing = service.status {
-                        refreshTrigger += 1
-                    } else if case .completed = service.status {
-                        // One final refresh
-                        refreshTrigger += 1
-                        break
-                    } else if case .failed = service.status {
-                        // One final refresh
-                        refreshTrigger += 1
-                        break
-                    }
-                }
             }
         }
     }
@@ -719,6 +692,17 @@ struct ParsePlanVersionsPanel: View {
 
                         for (fileRowIndex, row) in csvData.rows.enumerated() {
                             var rowDict = Dictionary(uniqueKeysWithValues: zip(csvData.headers, row))
+
+                            // Filter by Status field (Cash App and other providers)
+                            if let status = rowDict["Status"]?.uppercased() {
+                                if status == "FAILED" || status == "CANCELLED" {
+                                    // Skip failed/cancelled transactions
+                                    globalRowNumber += 1
+                                    continue
+                                }
+                                // Include: COMPLETE, PENDING, SETTLED, empty, or any other status
+                            }
+
                             // Add provenance metadata
                             rowDict["_sourceFile"] = rawFile.fileName
                             rowDict["_fileRowNumber"] = "\(fileRowIndex + 1)"  // Row in this file
@@ -771,34 +755,47 @@ struct ParsePlanVersionsPanel: View {
                 )
                 modelContext.insert(newSession)
 
-                // Select immediately so batch list updates live
-                selectedCategorizationSession = newSession
-                print("🎯 Created and selected session v\(nextVersion) - batches will appear as they're generated")
+                // CRITICAL: Save immediately to persist session before job starts
+                try modelContext.save()
 
-                // Create job parameters
+                // Store session ID for later reference
+                let sessionId = newSession.id
+
+                print("🎯 Created session v\(nextVersion)")
+
+                // Create job parameters (only IDs, not relationships)
                 let params = CategorizationJobParameters(
                     accountId: account.id,
-                    sessionId: newSession.id,
+                    sessionId: sessionId,
                     csvRows: allRows,
                     headers: headers,
                     startFromRow: 0
                 )
 
-                // Create and submit job
+                // Create and submit job (don't set relationships - executor will fetch fresh)
                 let job = Job(
                     type: .categorization,
-                    title: "Categorize \(allRows.count) transactions"
+                    title: "Categorize \(allRows.count) transactions",
+                    tags: ["parse-studio"]
                 )
                 job.subtitle = "Account: \(account.name)"
-                job.account = account
-                job.categorizationSession = newSession
                 job.totalItemsCount = allRows.count
                 job.parametersJSON = try? JSONEncoder().encode(params)
 
                 try await jobManager.submitJob(job)
-                currentJobId = job.id
-
                 print("🚀 Submitted categorization job: \(job.id)")
+
+                // NOW refetch and select session (after job is safely submitted)
+                if let refetchedSession = try? modelContext.fetch(
+                    FetchDescriptor<CategorizationSession>()
+                ).first(where: { $0.id == sessionId }) {
+                    selectedCategorizationSession = refetchedSession
+                    print("✅ Selected session v\(nextVersion)")
+                } else {
+                    selectedCategorizationSession = newSession
+                    print("⚠️ Could not refetch session, using original")
+                }
+
                 pendingCategorizationData = nil
 
             } catch let error as CategorizationError {
@@ -818,8 +815,6 @@ struct ParsePlanVersionsPanel: View {
     }
 
     private func resumeIncompleteSession(_ session: CategorizationSession) {
-        guard let service = directService else { return }
-
         print("🔄 Resuming incomplete session v\(session.versionNumber)")
 
         Task {
@@ -839,24 +834,32 @@ struct ParsePlanVersionsPanel: View {
                 session.errorMessage = nil
                 session.isPaused = false
 
-                let resumedSession = try await service.categorizeRows(
+                // CRITICAL: Save session changes before creating job
+                try? modelContext.save()
+
+                // Create job parameters
+                let params = CategorizationJobParameters(
+                    accountId: account.id,
+                    sessionId: session.id,
                     csvRows: allRows,
                     headers: headers,
-                    account: account,
-                    existingSession: session
+                    startFromRow: session.processedRowsCount
                 )
 
-                print("✅ Resumed categorization: \(resumedSession.transactionCount) total transactions")
-                selectedCategorizationSession = resumedSession
+                // Create and submit job (don't set relationships - JobManager will fetch fresh)
+                let job = Job(
+                    type: .categorization,
+                    title: "Resume categorization",
+                    tags: ["parse-studio"]
+                )
+                job.subtitle = "Account: \(account.name) - Session v\(session.versionNumber)"
+                job.totalItemsCount = allRows.count
+                job.processedItemsCount = session.processedRowsCount
+                job.parametersJSON = try? JSONEncoder().encode(params)
 
-                if resumedSession.isComplete {
-                    pendingCategorizationData = nil
-                }
+                try await jobManager.submitJob(job)
+                print("🚀 Submitted resume job: \(job.id)")
 
-            } catch let error as CategorizationError {
-                print("❌ Resume failed: \(error)")
-            } catch let error as ClaudeAPIError {
-                print("❌ Resume failed: \(error)")
             } catch {
                 print("❌ Resume failed: \(error)")
             }
@@ -864,43 +867,14 @@ struct ParsePlanVersionsPanel: View {
     }
 
     private func resumeSession(_ session: CategorizationSession) {
-        guard let data = pendingCategorizationData, let service = directService else {
-            // If no pending data, use resumeIncompleteSession instead
-            resumeIncompleteSession(session)
+        // Check if there's a paused job
+        if let job = currentJob, job.status == .paused {
+            Task { await jobManager.resumeJob(id: job.id) }
             return
         }
 
-        // Clear error message on resume
-        session.errorMessage = nil
-        service.resume()
-
-        Task {
-            do {
-                let resumedSession = try await service.categorizeRows(
-                    csvRows: data.rows,
-                    headers: data.headers,
-                    account: account,
-                    existingSession: session
-                )
-
-                print("✅ Resumed categorization: \(resumedSession.transactionCount) total transactions")
-                selectedCategorizationSession = resumedSession
-
-                if resumedSession.isComplete {
-                    pendingCategorizationData = nil
-                }
-
-            } catch let error as CategorizationError {
-                print("❌ Resume failed: \(error)")
-                // Error is now stored inline in session.errorMessage
-            } catch let error as ClaudeAPIError {
-                print("❌ Resume failed: \(error)")
-                // Error is now stored inline in session.errorMessage
-            } catch {
-                print("❌ Resume failed: \(error)")
-                // Error is now stored inline in session.errorMessage
-            }
-        }
+        // Otherwise, create a new job
+        resumeIncompleteSession(session)
     }
 
     // Removed - errors are now handled inline with pause/resume
@@ -1214,6 +1188,17 @@ struct ParsePlanVersionsPanel: View {
 
                 for (fileRowIndex, row) in csvData.rows.enumerated() {
                     var rowDict = Dictionary(uniqueKeysWithValues: zip(csvData.headers, row))
+
+                    // Filter by Status field (Cash App and other providers)
+                    if let status = rowDict["Status"]?.uppercased() {
+                        if status == "FAILED" || status == "CANCELLED" {
+                            // Skip failed/cancelled transactions
+                            globalRowNumber += 1
+                            continue
+                        }
+                        // Include: COMPLETE, PENDING, SETTLED, empty, or any other status
+                    }
+
                     // Add provenance metadata
                     rowDict["_sourceFile"] = rawFile.fileName
                     rowDict["_fileRowNumber"] = "\(fileRowIndex + 1)"
@@ -1272,6 +1257,83 @@ struct ParsePlanVersionsPanel: View {
         } catch {
             print("❌ Failed to clear: \(error)")
         }
+    }
+
+    private func logSessionDataForAgent(_ session: CategorizationSession) {
+        print("\n" + String(repeating: "=", count: 80))
+        print("SESSION DATA FOR AI AGENT - COPY-PASTE READY")
+        print(String(repeating: "=", count: 80))
+        print("")
+        print("Account: \(account.name)")
+        print("Session: v\(session.versionNumber) - \(session.sessionName)")
+        print("Balance Instrument: \(account.balanceInstrument ?? "Cash USD")")
+        print("Transactions: \(session.transactionCount)")
+        print("Source Rows: \(session.totalSourceRows)")
+        print("Created: \(session.createdAt.formatted())")
+        print("")
+        print(String(repeating: "-", count: 80))
+        print("TRANSACTIONS (Chronological Order - Oldest to Newest)")
+        print(String(repeating: "-", count: 80))
+        print("")
+
+        // Sort transactions chronologically (oldest first)
+        let sortedTransactions = session.transactions.sorted { t1, t2 in
+            let minRow1 = t1.sourceRowNumbers.min() ?? Int.max
+            let minRow2 = t2.sourceRowNumbers.min() ?? Int.max
+            return minRow1 > minRow2  // Higher row = older (Fidelity reverse order)
+        }
+
+        for (index, txn) in sortedTransactions.enumerated() {
+            let rowNumbers = txn.sourceRowNumbers.sorted().map { "#\($0)" }.joined(separator: ", ")
+
+            print("[\(index + 1)/\(sortedTransactions.count)] \(txn.date.formatted(date: .abbreviated, time: .omitted)) - \(txn.transactionDescription)")
+            print("    Type: \(txn.transactionType.rawValue)")
+            print("    Rows: \(rowNumbers)")
+            print("    Amount: \(txn.amount.formatted(.currency(code: "USD")))")
+
+            // Balance info
+            if let csvBalance = txn.csvBalance {
+                print("    CSV Balance: \(csvBalance.formatted(.currency(code: "USD")))")
+            }
+            if let calcBalance = txn.calculatedBalance {
+                print("    Calculated Balance: \(calcBalance.formatted(.currency(code: "USD")))")
+            }
+
+            // HIGHLIGHT balance discrepancies
+            if txn.hasBalanceDiscrepancy, let discrepancy = txn.balanceDiscrepancy {
+                print("    ⚠️  BALANCE DISCREPANCY: Off by \(abs(discrepancy).formatted(.currency(code: "USD")))")
+                if discrepancy > 0 {
+                    print("        (Calculated is HIGHER than CSV)")
+                } else {
+                    print("        (Calculated is LOWER than CSV)")
+                }
+            } else if txn.csvBalance != nil && txn.calculatedBalance != nil {
+                print("    ✅ Balance matches")
+            }
+
+            // Journal entries
+            if !txn.journalEntries.isEmpty {
+                print("    Journal Entries:")
+                for entry in txn.journalEntries {
+                    let type = entry.isDebit ? "DR" : "CR"
+                    let amount = entry.amount.formatted(.currency(code: "USD"))
+                    let sourceRows = entry.sourceRows.map { "#\($0.globalRowNumber)" }.joined(separator: ", ")
+                    print("      \(type): \(entry.accountName) \(amount) [rows: \(sourceRows)]")
+
+                    // Amount validation
+                    if entry.hasAmountDiscrepancy, let csvAmount = entry.csvAmount {
+                        print("         ⚠️  AMOUNT MISMATCH: Expected \(csvAmount.formatted(.currency(code: "USD")))")
+                    }
+                }
+            }
+
+            print("")
+        }
+
+        print(String(repeating: "=", count: 80))
+        print("END OF SESSION DATA")
+        print(String(repeating: "=", count: 80))
+        print("")
     }
 }
 

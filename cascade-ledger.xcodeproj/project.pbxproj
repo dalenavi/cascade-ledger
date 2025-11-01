@@ -6,7 +6,35 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F82589D92EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
+		F82589E32EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
+		F82589E42EB28162009BBB3C /* cascade_ledger_models.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F8258A092EB281A5009BBB3C /* cascade_ledger_models.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		F82589DA2EB28162009BBB3C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F842AFEE2EAEC78E00D9CD40 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F82589CD2EB28162009BBB3C;
+			remoteInfo = "cascade-ledger-models";
+		};
+		F82589DC2EB28162009BBB3C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F842AFEE2EAEC78E00D9CD40 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F842AFF52EAEC78E00D9CD40;
+			remoteInfo = "cascade-ledger";
+		};
+		F82589E12EB28162009BBB3C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F842AFEE2EAEC78E00D9CD40 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F82589CD2EB28162009BBB3C;
+			remoteInfo = "cascade-ledger-models";
+		};
 		F842B0062EAEC79000D9CD40 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = F842AFEE2EAEC78E00D9CD40 /* Project object */;
@@ -23,15 +51,94 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		F82589692EB1E5D2009BBB3C /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		F82589E82EB28162009BBB3C /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				F82589E42EB28162009BBB3C /* cascade_ledger_models.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		F825896B2EB1E5D2009BBB3C /* cascade-ledger-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "cascade-ledger-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = cascade_ledger_models.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		F82589D82EB28162009BBB3C /* cascade-ledger-modelsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "cascade-ledger-modelsTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F842AFF62EAEC78E00D9CD40 /* cascade-ledger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "cascade-ledger.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F842B0052EAEC79000D9CD40 /* cascade-ledgerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "cascade-ledgerTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F842B00F2EAEC79000D9CD40 /* cascade-ledgerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "cascade-ledgerUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F8D41DA52EB5A28B002F2BEC /* Exceptions for "cascade-ledger" folder in "cascade-ledger-cli" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/Account.swift,
+				Models/Asset.swift,
+				Models/AssetPrice.swift,
+				Models/BalanceCheckpoint.swift,
+				Models/Categorization.swift,
+				Models/CategorizationBatch.swift,
+				Models/CategorizationSession.swift,
+				Models/CSVFieldMapping.swift,
+				Models/CSVRow.swift,
+				Models/Discrepancy.swift,
+				Models/ImportBatch.swift,
+				Models/ImportSession.swift,
+				Models/Investigation.swift,
+				Models/Job.swift,
+				Models/JobData.swift,
+				Models/JournalEntry.swift,
+				Models/ParsePlan.swift,
+				Models/ParseRun.swift,
+				Models/Position.swift,
+				Models/ProposedFix.swift,
+				Models/ReconciliationSession.swift,
+				Models/ReviewSession.swift,
+				Models/SourceRow.swift,
+				Models/Transaction.swift,
+				Models/TransactionDelta.swift,
+				Models/ViewPreferences.swift,
+			);
+			target = F825896A2EB1E5D2009BBB3C /* cascade-ledger-cli */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		F825896C2EB1E5D2009BBB3C /* cascade-ledger-cli */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "cascade-ledger-cli";
+			sourceTree = "<group>";
+		};
+		F82589CF2EB28162009BBB3C /* cascade-ledger-models */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "cascade-ledger-models";
+			sourceTree = "<group>";
+		};
+		F82589DE2EB28162009BBB3C /* cascade-ledger-modelsTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "cascade-ledger-modelsTests";
+			sourceTree = "<group>";
+		};
 		F842AFF82EAEC78E00D9CD40 /* cascade-ledger */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F8D41DA52EB5A28B002F2BEC /* Exceptions for "cascade-ledger" folder in "cascade-ledger-cli" target */,
+			);
 			path = "cascade-ledger";
 			sourceTree = "<group>";
 		};
@@ -48,10 +155,34 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		F82589682EB1E5D2009BBB3C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F8258A092EB281A5009BBB3C /* cascade_ledger_models.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F82589CB2EB28162009BBB3C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F82589D52EB28162009BBB3C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F82589D92EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F842AFF32EAEC78E00D9CD40 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F82589E32EB28162009BBB3C /* cascade_ledger_models.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,12 +203,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		F8258A082EB281A5009BBB3C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		F842AFED2EAEC78E00D9CD40 = {
 			isa = PBXGroup;
 			children = (
 				F842AFF82EAEC78E00D9CD40 /* cascade-ledger */,
 				F842B0082EAEC79000D9CD40 /* cascade-ledgerTests */,
 				F842B0122EAEC79000D9CD40 /* cascade-ledgerUITests */,
+				F825896C2EB1E5D2009BBB3C /* cascade-ledger-cli */,
+				F82589CF2EB28162009BBB3C /* cascade-ledger-models */,
+				F82589DE2EB28162009BBB3C /* cascade-ledger-modelsTests */,
+				F8258A082EB281A5009BBB3C /* Frameworks */,
 				F842AFF72EAEC78E00D9CD40 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,13 +230,95 @@
 				F842AFF62EAEC78E00D9CD40 /* cascade-ledger.app */,
 				F842B0052EAEC79000D9CD40 /* cascade-ledgerTests.xctest */,
 				F842B00F2EAEC79000D9CD40 /* cascade-ledgerUITests.xctest */,
+				F825896B2EB1E5D2009BBB3C /* cascade-ledger-cli */,
+				F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */,
+				F82589D82EB28162009BBB3C /* cascade-ledger-modelsTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
+/* Begin PBXHeadersBuildPhase section */
+		F82589C92EB28162009BBB3C /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
 /* Begin PBXNativeTarget section */
+		F825896A2EB1E5D2009BBB3C /* cascade-ledger-cli */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F825896F2EB1E5D2009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-cli" */;
+			buildPhases = (
+				F82589672EB1E5D2009BBB3C /* Sources */,
+				F82589682EB1E5D2009BBB3C /* Frameworks */,
+				F82589692EB1E5D2009BBB3C /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F825896C2EB1E5D2009BBB3C /* cascade-ledger-cli */,
+			);
+			name = "cascade-ledger-cli";
+			packageProductDependencies = (
+			);
+			productName = "cascade-ledger-cli";
+			productReference = F825896B2EB1E5D2009BBB3C /* cascade-ledger-cli */;
+			productType = "com.apple.product-type.tool";
+		};
+		F82589CD2EB28162009BBB3C /* cascade-ledger-models */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F82589E52EB28162009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-models" */;
+			buildPhases = (
+				F82589C92EB28162009BBB3C /* Headers */,
+				F82589CA2EB28162009BBB3C /* Sources */,
+				F82589CB2EB28162009BBB3C /* Frameworks */,
+				F82589CC2EB28162009BBB3C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F82589CF2EB28162009BBB3C /* cascade-ledger-models */,
+			);
+			name = "cascade-ledger-models";
+			packageProductDependencies = (
+			);
+			productName = "cascade-ledger-models";
+			productReference = F82589CE2EB28162009BBB3C /* cascade_ledger_models.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		F82589D72EB28162009BBB3C /* cascade-ledger-modelsTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F82589E92EB28162009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-modelsTests" */;
+			buildPhases = (
+				F82589D42EB28162009BBB3C /* Sources */,
+				F82589D52EB28162009BBB3C /* Frameworks */,
+				F82589D62EB28162009BBB3C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F82589DB2EB28162009BBB3C /* PBXTargetDependency */,
+				F82589DD2EB28162009BBB3C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F82589DE2EB28162009BBB3C /* cascade-ledger-modelsTests */,
+			);
+			name = "cascade-ledger-modelsTests";
+			packageProductDependencies = (
+			);
+			productName = "cascade-ledger-modelsTests";
+			productReference = F82589D82EB28162009BBB3C /* cascade-ledger-modelsTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		F842AFF52EAEC78E00D9CD40 /* cascade-ledger */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F842B0192EAEC79000D9CD40 /* Build configuration list for PBXNativeTarget "cascade-ledger" */;
@@ -102,10 +326,12 @@
 				F842AFF22EAEC78E00D9CD40 /* Sources */,
 				F842AFF32EAEC78E00D9CD40 /* Frameworks */,
 				F842AFF42EAEC78E00D9CD40 /* Resources */,
+				F82589E82EB28162009BBB3C /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F82589E22EB28162009BBB3C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				F842AFF82EAEC78E00D9CD40 /* cascade-ledger */,
@@ -173,6 +399,16 @@
 				LastSwiftUpdateCheck = 2600;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
+					F825896A2EB1E5D2009BBB3C = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+					F82589CD2EB28162009BBB3C = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+					F82589D72EB28162009BBB3C = {
+						CreatedOnToolsVersion = 26.0.1;
+						TestTargetID = F842AFF52EAEC78E00D9CD40;
+					};
 					F842AFF52EAEC78E00D9CD40 = {
 						CreatedOnToolsVersion = 26.0.1;
 					};
@@ -203,11 +439,28 @@
 				F842AFF52EAEC78E00D9CD40 /* cascade-ledger */,
 				F842B0042EAEC79000D9CD40 /* cascade-ledgerTests */,
 				F842B00E2EAEC79000D9CD40 /* cascade-ledgerUITests */,
+				F825896A2EB1E5D2009BBB3C /* cascade-ledger-cli */,
+				F82589CD2EB28162009BBB3C /* cascade-ledger-models */,
+				F82589D72EB28162009BBB3C /* cascade-ledger-modelsTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		F82589CC2EB28162009BBB3C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F82589D62EB28162009BBB3C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F842AFF42EAEC78E00D9CD40 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -232,6 +485,27 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		F82589672EB1E5D2009BBB3C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F82589CA2EB28162009BBB3C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F82589D42EB28162009BBB3C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F842AFF22EAEC78E00D9CD40 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -256,6 +530,21 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		F82589DB2EB28162009BBB3C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F82589CD2EB28162009BBB3C /* cascade-ledger-models */;
+			targetProxy = F82589DA2EB28162009BBB3C /* PBXContainerItemProxy */;
+		};
+		F82589DD2EB28162009BBB3C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F842AFF52EAEC78E00D9CD40 /* cascade-ledger */;
+			targetProxy = F82589DC2EB28162009BBB3C /* PBXContainerItemProxy */;
+		};
+		F82589E22EB28162009BBB3C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F82589CD2EB28162009BBB3C /* cascade-ledger-models */;
+			targetProxy = F82589E12EB28162009BBB3C /* PBXContainerItemProxy */;
+		};
 		F842B0072EAEC79000D9CD40 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = F842AFF52EAEC78E00D9CD40 /* cascade-ledger */;
@@ -269,6 +558,174 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		F82589702EB1E5D2009BBB3C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F82589712EB1E5D2009BBB3C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F82589E62EB28162009BBB3C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALLOW_TARGET_PLATFORM_SPECIALIZATION = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = "navispiral.cascade-ledger-models";
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		F82589E72EB28162009BBB3C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALLOW_TARGET_PLATFORM_SPECIALIZATION = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = "navispiral.cascade-ledger-models";
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		F82589EA2EB28162009BBB3C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALLOW_TARGET_PLATFORM_SPECIALIZATION = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "navispiral.cascade-ledger-modelsTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/cascade-ledger.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/cascade-ledger";
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		F82589EB2EB28162009BBB3C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALLOW_TARGET_PLATFORM_SPECIALIZATION = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "navispiral.cascade-ledger-modelsTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/cascade-ledger.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/cascade-ledger";
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 		F842B0172EAEC79000D9CD40 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -570,6 +1027,33 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		F825896F2EB1E5D2009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-cli" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F82589702EB1E5D2009BBB3C /* Debug */,
+				F82589712EB1E5D2009BBB3C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F82589E52EB28162009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-models" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F82589E62EB28162009BBB3C /* Debug */,
+				F82589E72EB28162009BBB3C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F82589E92EB28162009BBB3C /* Build configuration list for PBXNativeTarget "cascade-ledger-modelsTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F82589EA2EB28162009BBB3C /* Debug */,
+				F82589EB2EB28162009BBB3C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		F842AFF12EAEC78E00D9CD40 /* Build configuration list for PBXProject "cascade-ledger" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
