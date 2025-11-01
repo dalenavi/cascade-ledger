@@ -13,20 +13,24 @@ import CryptoKit
 
 func parseCSV(fileURL: URL) throws -> (headers: [String], rows: [[String: String]]) {
     let content = try String(contentsOf: fileURL, encoding: .utf8)
-    let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+    let lines = content.components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
 
     guard let headerLine = lines.first else {
         throw NSError(domain: "CSVParser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Empty CSV file"])
     }
 
-    let headers = headerLine.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    let headers = headerLine.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .init(charactersIn: "\"")) }
 
     var rows: [[String: String]] = []
     for line in lines.dropFirst() {
-        let values = line.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let values = line.components(separatedBy: ",").map {
+            $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .init(charactersIn: "\""))
+        }
         var row: [String: String] = [:]
         for (index, header) in headers.enumerated() {
-            if index < values.count {
+            if index < values.count && !values[index].isEmpty {
                 row[header] = values[index]
             }
         }
@@ -258,11 +262,19 @@ case "source":
                 globalRowNumber = maxGlobal.globalRowNumber + 1
             }
 
+            print("Debug: CSV has \(headers.count) headers: \(headers.joined(separator: ", "))")
+
             for (index, csvRow) in csvRows.enumerated() {
                 // Parse date - try common formats and field names
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "MM/dd/yyyy"
                 let dateString = csvRow["Date"] ?? csvRow["Run Date"] ?? csvRow["Settlement Date"]
+
+                if index == 0 {
+                    print("Debug: First row date fields - Date: \(csvRow["Date"] ?? "nil"), Run Date: \(csvRow["Run Date"] ?? "nil"), Settlement Date: \(csvRow["Settlement Date"] ?? "nil")")
+                    print("Debug: Parsing '\(dateString ?? "nil")' → \(dateString.flatMap { dateFormatter.date(from: $0) } ?? Date())")
+                }
+
                 let date = dateString.flatMap { dateFormatter.date(from: $0) } ?? Date()
 
                 // Create mapped data
@@ -465,25 +477,33 @@ case "transaction":
     case "create":
         // Parse required args
         guard CommandLine.arguments.count >= 4 else {
-            print("Usage: cascade transaction create --from-rows <rows> --type <type> --description <desc> [--mapping <name>]")
+            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>]")
+            print("Entries format: \"AccountName:DR:Amount,AccountName:CR:Amount\"")
+            print("Example: --entries \"Cash:DR:100.50,Revenue:CR:100.50\"")
             break
         }
 
         var rowNumbers: [Int] = []
-        var txType: String?
+        var txDate: Date?
         var description: String?
         var mappingName: String?
+        var entriesSpec: String?
 
         var i = 3
         while i < CommandLine.arguments.count {
             if CommandLine.arguments[i] == "--from-rows" && i + 1 < CommandLine.arguments.count {
                 rowNumbers = parseRowNumbers(CommandLine.arguments[i + 1])
                 i += 2
-            } else if CommandLine.arguments[i] == "--type" && i + 1 < CommandLine.arguments.count {
-                txType = CommandLine.arguments[i + 1]
+            } else if CommandLine.arguments[i] == "--date" && i + 1 < CommandLine.arguments.count {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "MM/dd/yyyy"
+                txDate = dateFormatter.date(from: CommandLine.arguments[i + 1])
                 i += 2
             } else if CommandLine.arguments[i] == "--description" && i + 1 < CommandLine.arguments.count {
                 description = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--entries" && i + 1 < CommandLine.arguments.count {
+                entriesSpec = CommandLine.arguments[i + 1]
                 i += 2
             } else if CommandLine.arguments[i] == "--mapping" && i + 1 < CommandLine.arguments.count {
                 mappingName = CommandLine.arguments[i + 1]
@@ -493,9 +513,9 @@ case "transaction":
             }
         }
 
-        guard !rowNumbers.isEmpty, let txType = txType, let description = description else {
+        guard !rowNumbers.isEmpty, let txDate = txDate, let description = description, let entriesSpec = entriesSpec else {
             print("Error: Missing required arguments")
-            print("Usage: cascade transaction create --from-rows <rows> --type <type> --description <desc>")
+            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries>")
             break
         }
 
@@ -511,83 +531,80 @@ case "transaction":
             break
         }
 
-        // Get mapping if specified
-        var mapping: Mapping?
-        if let mapName = mappingName {
-            let mappingDesc = FetchDescriptor<Mapping>(
-                predicate: #Predicate { $0.name == mapName }
-            )
-            mapping = try? context.fetch(mappingDesc).first
-        }
-
-        // Parse transaction type
-        guard let transactionType = TransactionType(rawValue: txType) else {
-            print("Error: Invalid transaction type '\(txType)'")
-            print("Valid types: buy, sell, deposit, withdrawal, dividend, fee, transfer")
+        // Get mapping
+        guard let mapName = mappingName else {
+            print("Error: --mapping is required")
             break
         }
-
-        // Use date from first source row
-        let txDate = sourceRows.first?.mappedData.date ?? Date()
+        let mappingDesc = FetchDescriptor<Mapping>(
+            predicate: #Predicate { $0.name == mapName }
+        )
+        guard let mapping = try? context.fetch(mappingDesc).first else {
+            print("Error: Mapping '\(mapName)' not found")
+            break
+        }
 
         // Get account from mapping
-        guard let account = mapping?.account else {
+        guard let account = mapping.account else {
             print("Error: Mapping has no associated account")
-            print("Use: cascade mapping create <name> --account <account-name>")
             break
         }
 
-        // Create transaction
+        // Parse journal entries: "Cash:DR:100,Revenue:CR:100"
+        let entrySpecs = entriesSpec.split(separator: ",").map { String($0) }
+        var parsedEntries: [(accountName: String, side: String, amount: Decimal)] = []
+
+        for spec in entrySpecs {
+            let parts = spec.split(separator: ":").map { String($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 3,
+                  let amount = Decimal(string: parts[2]),
+                  (parts[1] == "DR" || parts[1] == "CR") else {
+                print("Error: Invalid entry spec '\(spec)'")
+                print("Format: AccountName:DR:Amount or AccountName:CR:Amount")
+                break
+            }
+            parsedEntries.append((accountName: parts[0], side: parts[1], amount: amount))
+        }
+
+        // Create transaction (type is optional now, default to transfer)
         let transaction = Transaction(
             date: txDate,
             description: description,
-            type: transactionType,
+            type: .transfer,
             account: account
         )
-        if let mapping = mapping {
-            transaction.mapping = mapping
-        }
+        transaction.mapping = mapping
         context.insert(transaction)
 
-        // Auto-create journal entries based on transaction type
-        // For now, create simple entries - we'll enhance this later
-        let totalAmount = sourceRows.compactMap { $0.mappedData.amount }.reduce(0, +)
-
-        // Create debit entry (asset/expense increases)
-        let debitEntry = JournalEntry(
-            accountType: .asset,
-            accountName: sourceRows.first?.mappedData.symbol ?? "Asset",
-            debitAmount: abs(totalAmount),
-            creditAmount: nil,
-            transaction: transaction
-        )
-        debitEntry.sourceRows = sourceRows
-        context.insert(debitEntry)
-
-        // Create credit entry (cash/liability decreases)
-        let creditEntry = JournalEntry(
-            accountType: .asset,
-            accountName: "Cash",
-            debitAmount: nil,
-            creditAmount: abs(totalAmount),
-            transaction: transaction
-        )
-        context.insert(creditEntry)
+        // Create journal entries from specification
+        for entry in parsedEntries {
+            let journalEntry = JournalEntry(
+                accountType: .asset,
+                accountName: entry.accountName,
+                debitAmount: entry.side == "DR" ? entry.amount : nil,
+                creditAmount: entry.side == "CR" ? entry.amount : nil,
+                transaction: transaction
+            )
+            journalEntry.sourceRows = sourceRows
+            context.insert(journalEntry)
+        }
 
         try! context.save()
 
         print("✓ Created transaction '\(description)'")
-        print("  Type: \(txType)")
-        print("  Amount: $\(totalAmount)")
-        print("  Source rows: \(rowNumbers.sorted().map(String.init).joined(separator: ", "))")
-        print("  Journal entries: 2 (auto-balanced)")
-        if let mapping = mapping {
-            // Calculate new coverage
-            let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }
-            let mapped = allRows.filter { !$0.journalEntries.isEmpty }
-            let coverage = allRows.count > 0 ? Double(mapped.count) / Double(allRows.count) * 100 : 0
-            print("  Coverage: \(mapped.count)/\(allRows.count) (\(String(format: "%.1f", coverage))%)")
+        print("  Date: \(txDate.formatted(date: .numeric, time: .omitted))")
+        print("  Journal entries: \(parsedEntries.count)")
+        for entry in parsedEntries {
+            print("    \(entry.accountName): $\(entry.amount) \(entry.side)")
         }
+        print("  Source rows: \(rowNumbers.sorted().map(String.init).joined(separator: ", "))")
+        print("  Balanced: \(transaction.isBalanced ? "✅" : "❌")")
+
+        // Calculate new coverage
+        let allRows = mapping.sourceFiles.flatMap { $0.sourceRows }
+        let mapped = allRows.filter { !$0.journalEntries.isEmpty }
+        let coverage = allRows.count > 0 ? Double(mapped.count) / Double(allRows.count) * 100 : 0
+        print("  Coverage: \(mapped.count)/\(allRows.count) (\(String(format: "%.1f", coverage))%)")
 
     case "list":
         var mappingName: String?
@@ -774,7 +791,9 @@ case "transaction":
     default:
         print("""
         Transaction commands:
-          transaction create --from-rows <rows> --type <type> --description <desc> [--mapping <name>]
+          transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> --mapping <name>
+            Entries format: "Account:DR:Amount,Account:CR:Amount"
+            Example: --entries "Cash:DR:2032.69,VS-Transfer:CR:2032.69"
           transaction list [--mapping <name>] [--source-file <file>]
           transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]
           transaction show <id>
