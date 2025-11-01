@@ -676,14 +676,26 @@ case "transaction":
             print("\n  \(tx.date.formatted(date: .numeric, time: .omitted)) - \(tx.transactionDescription)")
             print("    ID: \(tx.id)")
             print("    Type: \(tx.transactionType.rawValue)")
-            print("    Amount: $\(tx.journalEntries.compactMap { $0.debitAmount ?? $0.creditAmount }.reduce(0, +) / 2)")
             print("    Balanced: \(tx.isBalanced ? "✅" : "❌")")
+
+            // Show journal entries
+            print("    Journal Entries:")
+            for entry in tx.journalEntries {
+                let amount = entry.debitAmount ?? entry.creditAmount ?? 0
+                let side = entry.debitAmount != nil ? "DR" : "CR"
+                print("      \(entry.accountName): $\(amount) \(side)")
+            }
 
             // Show source rows
             let sourceRows = Set(tx.journalEntries.flatMap { $0.sourceRows })
             if !sourceRows.isEmpty {
                 let rowNums = sourceRows.map { $0.rowNumber }.sorted()
                 print("    Source rows: \(rowNums.map(String.init).joined(separator: ", "))")
+            }
+
+            // Show reported balance if available
+            if let csvBal = tx.csvBalance {
+                print("    Reported balance: $\(csvBal)")
             }
         }
         print()
@@ -931,13 +943,22 @@ case "validate":
     // Balance reconciliation (reported vs derived)
     print("\n💰 Balance Reconciliation (Reported vs Derived):")
 
-    // Calculate running balance
+    // Calculate running balance by summing Cash account entries chronologically
     var runningBalance: Decimal = 0
     var discrepancies: [(Transaction, Decimal, Decimal, Decimal)] = []
 
     for tx in transactions {
-        // Update running balance with net cash impact
-        runningBalance += tx.netCashImpact
+        // Update running balance with Cash entries (DR increases, CR decreases cash)
+        for entry in tx.journalEntries {
+            if entry.accountName == "Cash" {
+                if let debit = entry.debitAmount {
+                    runningBalance += debit
+                }
+                if let credit = entry.creditAmount {
+                    runningBalance -= credit
+                }
+            }
+        }
 
         // Compare with reported balance
         if let reportedBalance = tx.csvBalance {
