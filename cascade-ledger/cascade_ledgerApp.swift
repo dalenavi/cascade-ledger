@@ -25,6 +25,8 @@ struct cascade_ledgerApp: App {
             // Double-entry models
             Transaction.self,
             JournalEntry.self,
+            // Mapping system
+            Mapping.self,
             // Source provenance
             SourceRow.self,
             // Categorization models
@@ -51,6 +53,18 @@ struct cascade_ledgerApp: App {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
+
+    init() {
+        // Set up persistent store remote change notification
+        NotificationCenter.default.addObserver(
+            forName: .NSPersistentStoreRemoteChange,
+            object: nil,
+            queue: .main
+        ) { notification in
+            print("📡 Remote change detected, refreshing data...")
+            // The SwiftUI views with @Query will automatically refresh
+        }
+    }
 
     var body: some Scene {
         WindowGroup {

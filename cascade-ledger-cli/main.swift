@@ -75,9 +75,13 @@ print("Database exists: \(FileManager.default.fileExists(atPath: dbURL.path))")
 
 do {
     print("Creating ModelContainer...")
+
+    var config = ModelConfiguration(url: dbURL)
+    config.cloudKitDatabase = .none
+
     let container = try ModelContainer(
         for: Account.self, Transaction.self, JournalEntry.self, Mapping.self, RawFile.self, SourceRow.self,
-        configurations: ModelConfiguration(url: dbURL)
+        configurations: config
     )
 
     print("Creating ModelContext...")
