@@ -12,7 +12,13 @@ import CryptoKit
 // MARK: - CSV Parser
 
 func parseCSV(fileURL: URL) throws -> (headers: [String], rows: [[String: String]]) {
-    let content = try String(contentsOf: fileURL, encoding: .utf8)
+    var content = try String(contentsOf: fileURL, encoding: .utf8)
+
+    // Remove UTF-8 BOM if present
+    if content.hasPrefix("\u{FEFF}") {
+        content.removeFirst()
+    }
+
     let lines = content.components(separatedBy: .newlines)
         .map { $0.trimmingCharacters(in: .whitespaces) }
         .filter { !$0.isEmpty }
@@ -233,14 +239,26 @@ case "mapping":
 case "source":
     switch subcommand {
     case "list":
-        let files = try! context.fetch(FetchDescriptor<RawFile>(sortBy: [SortDescriptor(\.uploadedAt, order: .reverse)]))
+        // Check for --all flag
+        let showArchived = CommandLine.arguments.contains("--all")
+
+        let descriptor = FetchDescriptor<RawFile>(
+            predicate: showArchived ? nil : #Predicate { !$0.isArchived },
+            sortBy: [SortDescriptor(\.uploadedAt, order: .reverse)]
+        )
+        let files = try! context.fetch(descriptor)
+
         print("\n📁 SOURCE FILES:")
         print(String(repeating: "=", count: 60))
         if files.isEmpty {
             print("  No source files found")
+            if !showArchived {
+                print("  Use --all flag to show archived files")
+            }
         }
         for file in files {
-            print("\n  • \(file.fileName)")
+            let archived = file.isArchived ? " [ARCHIVED]" : ""
+            print("\n  • \(file.fileName)\(archived)")
             print("    Size: \(file.fileSize) bytes")
             print("    Rows: \(file.sourceRows.count)")
             print("    Hash: \(String(file.sha256Hash.prefix(12)))...")
@@ -362,11 +380,62 @@ case "source":
             print("Error: Failed to add source file: \(error)")
         }
 
+    case "archive":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade source archive <filename>")
+            break
+        }
+        let fileName = CommandLine.arguments[3]
+
+        // Find file by name
+        let descriptor = FetchDescriptor<RawFile>(
+            predicate: #Predicate { $0.fileName == fileName }
+        )
+
+        guard let file = try? context.fetch(descriptor).first else {
+            print("Error: Source file '\(fileName)' not found")
+            print("Use 'cascade source list' to see available files")
+            break
+        }
+
+        print("Archiving source file: \(file.fileName)")
+        print("  Rows: \(file.sourceRows.count)")
+        print("  Size: \(file.fileSize) bytes")
+
+        file.isArchived = true
+        try! context.save()
+
+        print("✓ Source file archived (will be hidden from list)")
+
+    case "unarchive":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade source unarchive <filename>")
+            break
+        }
+        let fileName = CommandLine.arguments[3]
+
+        // Find file by name (including archived)
+        let descriptor = FetchDescriptor<RawFile>(
+            predicate: #Predicate { $0.fileName == fileName }
+        )
+
+        guard let file = try? context.fetch(descriptor).first else {
+            print("Error: Source file '\(fileName)' not found")
+            break
+        }
+
+        file.isArchived = false
+        try! context.save()
+
+        print("✓ Source file unarchived")
+
     default:
         print("""
         Source file commands:
-          source list               List all source files
-          source add <file>         Add CSV file [--mapping <name>]
+          source list [--all]          List source files (--all shows archived)
+          source add <file>            Add CSV file [--mapping <name>]
+          source archive <filename>    Archive a source file
+          source unarchive <filename>  Unarchive a source file
         """)
     }
 
@@ -515,15 +584,19 @@ case "transaction":
     case "create":
         // Parse required args
         guard CommandLine.arguments.count >= 4 else {
-            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>] [--category <path>] [--quantity <amount>]")
+            print("Usage: cascade transaction create --from-file <file> --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries> [--mapping <name>] [--category <path>] [--quantity <amount>]")
+            print("File format: Name of source file (e.g., \"file.csv\")")
+            print("Rows format: Single number, comma-separated, or ranges (e.g., \"1\", \"1,2,3\", \"1-5\")")
             print("Entries format: \"AccountName:DR:Amount,AccountName:CR:Amount\"")
             print("Category format: \"primary/secondary/tertiary\" (e.g., \"investment/equity/tech\")")
             print("Quantity: Optional quantity for asset purchases (e.g., --quantity \"0.00181432\" for BTC)")
-            print("Example: --entries \"Cash:DR:100.50,Revenue:CR:100.50\" --category \"income/payroll\"")
-            print("Example: --entries \"BTC:DR:196.51,BTC-Fee:DR:3.50,Cash:CR:200.01\" --quantity \"0.00181\" --category \"investment/crypto\"")
+            print("")
+            print("Examples:")
+            print("  cascade transaction create --from-file \"cashapp.csv\" --from-rows 245 --date \"10/14/2025\" --description \"BTC Buy\" --entries \"BTC:DR:196.51,Cash:CR:196.51\" --mapping \"cashapp-2025\" --category \"investment/crypto\" --quantity \"0.00171\"")
             break
         }
 
+        var sourceFileName: String?
         var rowNumbers: [Int] = []
         var txDate: Date?
         var description: String?
@@ -534,7 +607,10 @@ case "transaction":
 
         var i = 3
         while i < CommandLine.arguments.count {
-            if CommandLine.arguments[i] == "--from-rows" && i + 1 < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--from-file" && i + 1 < CommandLine.arguments.count {
+                sourceFileName = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--from-rows" && i + 1 < CommandLine.arguments.count {
                 rowNumbers = parseRowNumbers(CommandLine.arguments[i + 1])
                 i += 2
             } else if CommandLine.arguments[i] == "--date" && i + 1 < CommandLine.arguments.count {
@@ -564,20 +640,61 @@ case "transaction":
 
         guard !rowNumbers.isEmpty, let txDate = txDate, let description = description, let entriesSpec = entriesSpec else {
             print("Error: Missing required arguments")
-            print("Usage: cascade transaction create --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries>")
+            print("Usage: cascade transaction create --from-file <file> --from-rows <rows> --date <MM/dd/yyyy> --description <desc> --entries <entries>")
             break
         }
 
-        // Fetch source rows by global row number
-        let rowsDesc = FetchDescriptor<SourceRow>(
-            predicate: #Predicate { rowNumbers.contains($0.globalRowNumber) }
-        )
-        let sourceRows = try! context.fetch(rowsDesc)
+        // Fetch source rows by file name + row number (NEW - globalRowNumber deprecated)
+        var sourceRows: [SourceRow] = []
 
-        guard sourceRows.count == rowNumbers.count else {
-            print("Error: Could not find all requested rows")
-            print("  Requested: \(rowNumbers.count), Found: \(sourceRows.count)")
-            break
+        if let fileName = sourceFileName {
+            // New method: Query by fileName + rowNumber
+            // First find the RawFile
+            let fileDesc = FetchDescriptor<RawFile>(
+                predicate: #Predicate { $0.fileName == fileName }
+            )
+            guard let rawFile = try? context.fetch(fileDesc).first else {
+                print("Error: File '\(fileName)' not found")
+                print("Use 'cascade source list' to see available files")
+                break
+            }
+
+            // Fetch rows by file + row numbers
+            let fileId = rawFile.id
+            for rowNum in rowNumbers {
+                let rowDesc = FetchDescriptor<SourceRow>(
+                    predicate: #Predicate<SourceRow> { row in
+                        row.rowNumber == rowNum
+                    }
+                )
+                if let row = (try? context.fetch(rowDesc))?.first(where: { $0.sourceFile.id == fileId }) {
+                    sourceRows.append(row)
+                }
+            }
+
+            guard sourceRows.count == rowNumbers.count else {
+                print("Error: Could not find all requested rows in file '\(fileName)'")
+                print("  Requested: \(rowNumbers.sorted())")
+                print("  Found: \(sourceRows.count) rows")
+                let found = sourceRows.map { $0.rowNumber }.sorted()
+                print("  Found rows: \(found)")
+                break
+            }
+        } else {
+            // Legacy fallback: Use globalRowNumber (DEPRECATED)
+            print("Warning: Using deprecated globalRowNumber lookup")
+            print("Please use --from-file parameter: --from-file \"filename.csv\" --from-rows 1,2,3")
+
+            let rowsDesc = FetchDescriptor<SourceRow>(
+                predicate: #Predicate { rowNumbers.contains($0.globalRowNumber) }
+            )
+            sourceRows = try! context.fetch(rowsDesc)
+
+            guard sourceRows.count == rowNumbers.count else {
+                print("Error: Could not find all requested rows")
+                print("  Requested: \(rowNumbers.count), Found: \(sourceRows.count)")
+                break
+            }
         }
 
         // Get mapping
@@ -862,12 +979,21 @@ case "transaction":
     case "update":
         guard CommandLine.arguments.count >= 4 else {
             print("Usage: cascade transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]")
+            print("       cascade transaction update <id> --update-entry <account> --quantity <qty> [--debit <amt>] [--credit <amt>]")
+            print("")
+            print("Examples:")
+            print("  cascade transaction update ABC123... --link-rows 5,6")
+            print("  cascade transaction update ABC123... --update-entry FXAIX --quantity -10.11 --credit 1915.54")
             break
         }
 
         let txId = CommandLine.arguments[3]
         var linkRows: [Int] = []
         var unlinkRows: [Int] = []
+        var updateEntryAccount: String?
+        var updateQuantity: Decimal?
+        var updateDebit: Decimal?
+        var updateCredit: Decimal?
 
         var i = 4
         while i < CommandLine.arguments.count {
@@ -876,6 +1002,18 @@ case "transaction":
                 i += 2
             } else if CommandLine.arguments[i] == "--unlink-rows" && i + 1 < CommandLine.arguments.count {
                 unlinkRows = parseRowNumbers(CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--update-entry" && i + 1 < CommandLine.arguments.count {
+                updateEntryAccount = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--quantity" && i + 1 < CommandLine.arguments.count {
+                updateQuantity = Decimal(string: CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--debit" && i + 1 < CommandLine.arguments.count {
+                updateDebit = Decimal(string: CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--credit" && i + 1 < CommandLine.arguments.count {
+                updateCredit = Decimal(string: CommandLine.arguments[i + 1])
                 i += 2
             } else {
                 i += 1
@@ -916,9 +1054,50 @@ case "transaction":
             }
         }
 
+        // Update journal entry fields
+        if let accountName = updateEntryAccount {
+            // Find the journal entry matching this account
+            guard let entry = transaction.journalEntries.first(where: { $0.accountName == accountName }) else {
+                print("Error: No journal entry found for account '\(accountName)'")
+                print("Available accounts: \(transaction.journalEntries.map { $0.accountName }.joined(separator: ", "))")
+                break
+            }
+
+            var updated = false
+
+            // Update quantity
+            if let qty = updateQuantity {
+                entry.quantity = qty
+                entry.quantityUnit = "shares"
+                updated = true
+                print("✓ Updated quantity for \(accountName): \(qty)")
+            }
+
+            // Update debit amount
+            if let debit = updateDebit {
+                entry.debitAmount = debit
+                entry.creditAmount = nil  // Clear credit when setting debit
+                updated = true
+                print("✓ Updated debit for \(accountName): $\(debit)")
+            }
+
+            // Update credit amount
+            if let credit = updateCredit {
+                entry.creditAmount = credit
+                entry.debitAmount = nil  // Clear debit when setting credit
+                updated = true
+                print("✓ Updated credit for \(accountName): $\(credit)")
+            }
+
+            if !updated {
+                print("Warning: No updates specified for entry '\(accountName)'")
+                print("Use --quantity, --debit, or --credit flags")
+            }
+        }
+
         try! context.save()
 
-        print("✓ Updated transaction '\(transaction.transactionDescription)'")
+        print("\n✓ Updated transaction '\(transaction.transactionDescription)'")
         if !linkRows.isEmpty {
             print("  Linked rows: \(linkRows.sorted().map(String.init).joined(separator: ", "))")
         }
@@ -928,7 +1107,21 @@ case "transaction":
 
         // Show updated source rows
         let sourceRows = Set(transaction.journalEntries.flatMap { $0.sourceRows })
-        print("  Current source rows: \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+        if !sourceRows.isEmpty {
+            print("  Current source rows: \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+        }
+
+        // Show updated journal entries
+        if updateEntryAccount != nil {
+            print("\n  Updated Journal Entries:")
+            for entry in transaction.journalEntries {
+                let amt = entry.debitAmount ?? entry.creditAmount ?? 0
+                let side = entry.debitAmount != nil ? "DR" : "CR"
+                let qtyStr = entry.quantity.map { "\($0) shares " } ?? ""
+                print("    \(entry.accountName): \(qtyStr)$\(amt) \(side)")
+            }
+            print("\n  Balanced: \(transaction.isBalanced ? "✅" : "❌")")
+        }
 
     case "categorize":
         guard CommandLine.arguments.count >= 5 else {
@@ -1008,6 +1201,63 @@ case "transaction":
             }
         }
         print()
+
+    case "delete":
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade transaction delete <id> [--yes]")
+            print("")
+            print("Deletes a transaction and all its journal entries.")
+            print("Source row links are removed but source rows are preserved.")
+            print("")
+            print("Use --yes to skip confirmation.")
+            break
+        }
+
+        let txId = CommandLine.arguments[3]
+        let skipConfirm = CommandLine.arguments.contains("--yes")
+
+        guard let txUUID = UUID(uuidString: txId) else {
+            print("Error: Invalid transaction ID")
+            break
+        }
+
+        let txDesc = FetchDescriptor<Transaction>(
+            predicate: #Predicate { $0.id == txUUID }
+        )
+        guard let transaction = try? context.fetch(txDesc).first else {
+            print("Error: Transaction not found")
+            break
+        }
+
+        // Show what will be deleted
+        print("\n⚠️  DELETE TRANSACTION:")
+        print("  Date: \(transaction.date.formatted(date: .numeric, time: .omitted))")
+        print("  Description: \(transaction.transactionDescription)")
+        print("  Amount: $\(transaction.totalDebits)")
+        print("  Journal Entries: \(transaction.journalEntries.count)")
+
+        let sourceRows = Set(transaction.journalEntries.flatMap { $0.sourceRows })
+        if !sourceRows.isEmpty {
+            print("  Source Rows: \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", "))")
+        }
+
+        // Confirm
+        if !skipConfirm {
+            print("\nType 'yes' to confirm deletion:")
+            guard let input = readLine(), input.lowercased() == "yes" else {
+                print("Cancelled")
+                break
+            }
+        }
+
+        // Delete transaction (cascade deletes journal entries)
+        context.delete(transaction)
+        try! context.save()
+
+        print("\n✓ Transaction deleted")
+        if !sourceRows.isEmpty {
+            print("  Source rows \(sourceRows.map { $0.rowNumber }.sorted().map(String.init).joined(separator: ", ")) are now unmapped")
+        }
 
     case "batch-create":
         guard CommandLine.arguments.count >= 4 else {
@@ -1259,6 +1509,8 @@ case "transaction":
           transaction batch-create --input <file.json> --mapping <name> [--dry-run] [--continue-on-error]
           transaction list [--mapping <name>] [--source-file <file>]
           transaction update <id> [--link-rows <rows>] [--unlink-rows <rows>]
+          transaction update <id> --update-entry <account> --quantity <qty> [--debit <amt>] [--credit <amt>]
+          transaction delete <id> [--yes]
           transaction show <id>
           transaction categorize <id> <category>
         """)
@@ -1354,8 +1606,49 @@ case "validate":
         }
     }
 
-    // Transaction balance validation (debits = credits)
+    // Duplicate transaction detection
     let transactions = mapping.transactions.sorted(by: { $0.date < $1.date })
+    var potentialDuplicates: [(Transaction, [Transaction])] = []
+
+    for (index, tx) in transactions.enumerated() {
+        // Find transactions with same date and similar description/amount
+        let candidates = transactions[(index + 1)...].filter { other in
+            // Same date
+            guard Calendar.current.isDate(tx.date, inSameDayAs: other.date) else { return false }
+
+            // Same description
+            guard tx.transactionDescription == other.transactionDescription else { return false }
+
+            // Same total amount (within 1 cent)
+            let txTotal = tx.totalDebits
+            let otherTotal = other.totalDebits
+            guard abs(txTotal - otherTotal) < 0.01 else { return false }
+
+            return true
+        }
+
+        if !candidates.isEmpty {
+            potentialDuplicates.append((tx, Array(candidates)))
+        }
+    }
+
+    if !potentialDuplicates.isEmpty {
+        print("\n🔄 Potential Duplicate Transactions:")
+        print("  Found \(potentialDuplicates.count) sets of potential duplicates")
+        for (original, dups) in potentialDuplicates {
+            print("\n  • \(original.date.formatted(date: .numeric, time: .omitted)) - \(original.transactionDescription) ($\(original.totalDebits))")
+            print("    Original ID: \(original.id)")
+            for dup in dups {
+                print("    Duplicate ID: \(dup.id)")
+            }
+            // Show source rows for comparison
+            let origRows = Set(original.journalEntries.flatMap { $0.sourceRows }).map { $0.rowNumber }.sorted()
+            let dupRows = Set(dups.first!.journalEntries.flatMap { $0.sourceRows }).map { $0.rowNumber }.sorted()
+            print("    Source rows: \(origRows) vs \(dupRows)")
+        }
+    }
+
+    // Transaction balance validation (debits = credits)
     let unbalanced = transactions.filter { !$0.isBalanced }
 
     print("\n⚖️  Transaction Balance (Debits = Credits):")
@@ -1429,10 +1722,28 @@ case "validate":
 
     // Overall status
     print("\n" + String(repeating: "=", count: 80))
-    if coverage == 100 && duplicates.isEmpty && unbalanced.isEmpty && discrepancies.isEmpty {
+    let hasIssues = coverage < 100 || !duplicates.isEmpty || !potentialDuplicates.isEmpty || !unbalanced.isEmpty || !discrepancies.isEmpty
+
+    if !hasIssues {
         print("✅ VALID - Ready to activate!")
     } else {
-        print("⚠️  INCOMPLETE - Address issues above before activating")
+        print("⚠️  ISSUES FOUND:")
+        if coverage < 100 {
+            print("  • \(unmappedRows.count) unmapped rows")
+        }
+        if !duplicates.isEmpty {
+            print("  • \(duplicates.count) double-mapped rows")
+        }
+        if !potentialDuplicates.isEmpty {
+            print("  • \(potentialDuplicates.count) sets of duplicate transactions")
+        }
+        if !unbalanced.isEmpty {
+            print("  • \(unbalanced.count) unbalanced transactions")
+        }
+        if !discrepancies.isEmpty {
+            print("  • \(discrepancies.count) balance discrepancies")
+        }
+        print("\n  Review and resolve before activating")
     }
     print()
 
@@ -1627,6 +1938,406 @@ case "reset":
     print("✓ Deleted mapping '\(mappingName)'")
     print("  Removed \(txCount) transactions")
     print("  Source files remain in database for reuse")
+
+case "price":
+    let subcommand = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "help"
+
+    switch subcommand {
+    case "fetch":
+        // Parse arguments
+        var assetSymbol: String?
+        var fromDate: Date?
+        var toDate: Date = Date()
+
+        var i = 3
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--asset" && i + 1 < CommandLine.arguments.count {
+                assetSymbol = CommandLine.arguments[i + 1]
+                i += 2
+            } else if CommandLine.arguments[i] == "--from" && i + 1 < CommandLine.arguments.count {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "MM/dd/yyyy"
+                fromDate = dateFormatter.date(from: CommandLine.arguments[i + 1])
+                i += 2
+            } else if CommandLine.arguments[i] == "--to" && i + 1 < CommandLine.arguments.count {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "MM/dd/yyyy"
+                toDate = dateFormatter.date(from: CommandLine.arguments[i + 1]) ?? Date()
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        guard let symbol = assetSymbol else {
+            print("Error: --asset is required")
+            print("Usage: cascade price fetch --asset <symbol> [--from MM/dd/yyyy] [--to MM/dd/yyyy]")
+            print("Example: cascade price fetch --asset BTC --from 10/01/2025 --to 11/01/2025")
+            break
+        }
+
+        // Default to last 30 days if no from date
+        if fromDate == nil {
+            fromDate = Calendar.current.date(byAdding: .day, value: -30, to: toDate)!
+        }
+
+        guard let from = fromDate else {
+            print("Error: Invalid date format")
+            break
+        }
+
+        print("Fetching \(symbol) prices from \(from.formatted(date: .numeric, time: .omitted)) to \(toDate.formatted(date: .numeric, time: .omitted))...")
+
+        // Determine if crypto
+        let cryptoSymbols = ["BTC", "ETH", "SOL", "ADA"]
+        let isCrypto = cryptoSymbols.contains(symbol.uppercased())
+
+        if !isCrypto {
+            print("Error: Currently only crypto symbols supported (BTC, ETH, SOL, ADA)")
+            print("For stocks/ETFs, use the GUI Price Data view")
+            break
+        }
+
+        // Map symbol to CoinGecko ID
+        let coinId: String
+        switch symbol.uppercased() {
+        case "BTC": coinId = "bitcoin"
+        case "ETH": coinId = "ethereum"
+        case "SOL": coinId = "solana"
+        case "ADA": coinId = "cardano"
+        default: coinId = symbol.lowercased()
+        }
+
+        // Build CoinGecko API URL
+        let urlString = "https://api.coingecko.com/api/v3/coins/\(coinId)/market_chart/range"
+        var components = URLComponents(string: urlString)!
+        components.queryItems = [
+            URLQueryItem(name: "vs_currency", value: "usd"),
+            URLQueryItem(name: "from", value: "\(Int(from.timeIntervalSince1970))"),
+            URLQueryItem(name: "to", value: "\(Int(toDate.timeIntervalSince1970))")
+        ]
+
+        guard let requestURL = components.url else {
+            print("Error: Invalid URL")
+            break
+        }
+
+        // Fetch from CoinGecko
+        print("Calling CoinGecko API for \(coinId)...")
+
+        let task = Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: requestURL)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("Error: Invalid HTTP response")
+                    return
+                }
+
+                print("HTTP Status: \(httpResponse.statusCode)")
+
+                if httpResponse.statusCode == 429 {
+                    print("Error: Rate limited by CoinGecko")
+                    print("Free API allows ~50 calls/minute")
+                    return
+                }
+
+                guard httpResponse.statusCode == 200 else {
+                    print("Error: CoinGecko returned status \(httpResponse.statusCode)")
+                    if let errorBody = String(data: data, encoding: .utf8) {
+                        print("Response: \(errorBody)")
+                    }
+                    return
+                }
+
+                let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+                guard let pricesArray = json["prices"] as? [[Any]] else {
+                    print("Error: No prices data in response")
+                    print("Response keys: \(json.keys.joined(separator: ", "))")
+                    return
+                }
+
+                print("✓ Received \(pricesArray.count) price points")
+
+                // Store prices
+                var importedCount = 0
+                var updatedCount = 0
+
+                for item in pricesArray {
+                    guard let timestamp = item[0] as? TimeInterval,
+                          let priceValue = item[1] as? Double else {
+                        continue
+                    }
+
+                    let date = Date(timeIntervalSince1970: timestamp / 1000)  // CoinGecko uses milliseconds
+                    let dayStart = Calendar.current.startOfDay(for: date)
+                    let price = Decimal(priceValue)
+
+                    // Check if exists
+                    let descriptor = FetchDescriptor<AssetPrice>(
+                        predicate: #Predicate<AssetPrice> { existing in
+                            existing.assetId == symbol && existing.date == dayStart
+                        }
+                    )
+
+                    let existing = try context.fetch(descriptor)
+                    if existing.isEmpty {
+                        let assetPrice = AssetPrice(
+                            assetId: symbol,
+                            date: dayStart,
+                            price: price,
+                            source: .api
+                        )
+                        context.insert(assetPrice)
+                        importedCount += 1
+                    } else {
+                        updatedCount += 1
+                    }
+                }
+
+                try context.save()
+
+                print("")
+                print("✓ Import complete:")
+                print("  Imported: \(importedCount) new prices")
+                print("  Skipped: \(updatedCount) existing prices")
+                print("  Asset: \(symbol)")
+
+            } catch {
+                print("Error fetching prices: \(error)")
+            }
+        }
+
+        // Wait for async task
+        let _ = await task.value
+
+    case "import":
+        // Import prices from CSV file
+        // Expected format: Date,Symbol,Close
+        guard CommandLine.arguments.count >= 4 else {
+            print("Usage: cascade price import <csv-file> [--asset <symbol>]")
+            print("Expected CSV format: Date,Symbol,Close")
+            print("Example: cascade price import btc_prices.csv --asset BTC")
+            break
+        }
+
+        let csvPath = CommandLine.arguments[3]
+        var assetFilter: String?
+
+        // Parse optional --asset filter
+        var i = 4
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--asset" && i + 1 < CommandLine.arguments.count {
+                assetFilter = CommandLine.arguments[i + 1]
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        // Read CSV file
+        let fileURL = URL(fileURLWithPath: (csvPath as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("Error: File not found at \(fileURL.path)")
+            break
+        }
+
+        do {
+            let csvContent = try String(contentsOf: fileURL, encoding: .utf8)
+            let lines = csvContent.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+
+            guard lines.count > 1 else {
+                print("Error: CSV file is empty")
+                break
+            }
+
+            // Parse header
+            let header = lines[0].components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard let dateIdx = header.firstIndex(where: { $0.lowercased().contains("date") }),
+                  let symbolIdx = header.firstIndex(where: { $0.lowercased().contains("symbol") }),
+                  let priceIdx = header.firstIndex(where: { $0.lowercased().contains("close") || $0.lowercased().contains("price") }) else {
+                print("Error: Invalid CSV format. Expected columns: Date, Symbol, Close")
+                print("Found columns: \(header.joined(separator: ", "))")
+                break
+            }
+
+            print("Importing prices from \(fileURL.lastPathComponent)...")
+            print("Columns: \(header.joined(separator: ", "))")
+
+            var importedCount = 0
+            var updatedCount = 0
+            var skippedCount = 0
+            var errorCount = 0
+
+            let dateFormatter = DateFormatter()
+            let dateFormats = ["yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy"]
+
+            for (_, line) in lines.dropFirst().enumerated() {
+                let fields = line.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+
+                guard fields.count > max(dateIdx, symbolIdx, priceIdx) else {
+                    errorCount += 1
+                    continue
+                }
+
+                let dateStr = fields[dateIdx]
+                let symbol = fields[symbolIdx]
+                let priceStr = fields[priceIdx]
+
+                // Apply asset filter if specified
+                if let filter = assetFilter, symbol != filter {
+                    skippedCount += 1
+                    continue
+                }
+
+                // Parse date
+                var date: Date?
+                for format in dateFormats {
+                    dateFormatter.dateFormat = format
+                    if let parsedDate = dateFormatter.date(from: dateStr) {
+                        date = parsedDate
+                        break
+                    }
+                }
+
+                guard let validDate = date else {
+                    errorCount += 1
+                    continue
+                }
+
+                // Parse price
+                guard let price = Decimal(string: priceStr.replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: "")) else {
+                    errorCount += 1
+                    continue
+                }
+
+                let dayStart = Calendar.current.startOfDay(for: validDate)
+
+                // Check if exists
+                let descriptor = FetchDescriptor<AssetPrice>(
+                    predicate: #Predicate<AssetPrice> { existing in
+                        existing.assetId == symbol && existing.date == dayStart
+                    }
+                )
+
+                let existing = try context.fetch(descriptor)
+                if existing.isEmpty {
+                    let assetPrice = AssetPrice(
+                        assetId: symbol,
+                        date: dayStart,
+                        price: price,
+                        source: .csvImport
+                    )
+                    context.insert(assetPrice)
+                    importedCount += 1
+                } else if let existingPrice = existing.first, existingPrice.price != price {
+                    existingPrice.price = price
+                    existingPrice.source = .csvImport
+                    updatedCount += 1
+                } else {
+                    skippedCount += 1
+                }
+
+                // Save periodically
+                if (importedCount + updatedCount) % 1000 == 0 {
+                    try context.save()
+                    print("  Progress: \(importedCount + updatedCount) processed...")
+                }
+            }
+
+            // Final save
+            try context.save()
+
+            print("")
+            print("✓ Import complete:")
+            print("  Imported: \(importedCount) new prices")
+            print("  Updated: \(updatedCount) existing prices")
+            print("  Skipped: \(skippedCount) (no change)")
+            print("  Errors: \(errorCount)")
+
+        } catch {
+            print("Error reading or processing CSV: \(error)")
+        }
+
+    case "list":
+        // List all prices, optionally filtered by asset
+        var assetFilter: String?
+
+        var i = 3
+        while i < CommandLine.arguments.count {
+            if CommandLine.arguments[i] == "--asset" && i + 1 < CommandLine.arguments.count {
+                assetFilter = CommandLine.arguments[i + 1]
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+
+        let descriptor: FetchDescriptor<AssetPrice>
+        if let asset = assetFilter {
+            descriptor = FetchDescriptor<AssetPrice>(
+                predicate: #Predicate { $0.assetId == asset },
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<AssetPrice>(
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+        }
+
+        let prices = try! context.fetch(descriptor)
+
+        if prices.isEmpty {
+            print("No price data found")
+            if let asset = assetFilter {
+                print("For asset: \(asset)")
+            }
+        } else {
+            print("\n📈 PRICE DATA:")
+            print(String(repeating: "=", count: 60))
+            if let asset = assetFilter {
+                print("Asset: \(asset)")
+            }
+            print("Total: \(prices.count) price points")
+            print("")
+
+            // Group by asset
+            let grouped = Dictionary(grouping: prices, by: { $0.assetId })
+            for (asset, assetPrices) in grouped.sorted(by: { $0.key < $1.key }) {
+                let sorted = assetPrices.sorted { $0.date > $1.date }
+                if let latest = sorted.first, let oldest = sorted.last {
+                    print("  \(asset): \(assetPrices.count) prices")
+                    print("    Latest: \(latest.date.formatted(date: .numeric, time: .omitted)) @ $\(latest.price)")
+                    print("    Oldest: \(oldest.date.formatted(date: .numeric, time: .omitted)) @ $\(oldest.price)")
+                }
+            }
+            print()
+        }
+
+    default:
+        print("""
+        Price commands:
+          price fetch --asset <symbol> [--from MM/dd/yyyy] [--to MM/dd/yyyy]
+            Fetch historical prices for a crypto asset from CoinGecko
+
+          price import <csv-file> [--asset <symbol>]
+            Import historical prices from CSV (Date,Symbol,Close format)
+
+          price list [--asset <symbol>]
+            List price data in database
+
+        Examples:
+          cascade price fetch --asset BTC --from 10/01/2025 --to 11/01/2025
+          cascade price fetch --asset BTC  # Last 30 days
+          cascade price import btc_prices.csv --asset BTC
+          cascade price import all_prices.csv  # Import all symbols
+          cascade price list --asset BTC
+          cascade price list  # All assets
+        """)
+    }
 
 case "stats":
     let accountCount = try! context.fetchCount(FetchDescriptor<Account>())
@@ -1926,6 +2637,8 @@ default:
       transaction create              Create transaction from rows
       transaction list                List transactions [--mapping <name>]
       transaction update <id>         Update row links [--link-rows/--unlink-rows]
+                                      Update journal entries [--update-entry --quantity --debit --credit]
+      transaction delete <id>         Delete transaction [--yes to skip confirmation]
       transaction show <id>           Show transaction details
 
       validate [<mapping>]            Validate mapping (coverage, balance, duplicates)
@@ -1934,6 +2647,11 @@ default:
       query [--positions]             Query/filter transactions
                                       [--asset <name>] [--category <path>]
                                       [--from <date>] [--to <date>]
+
+      price fetch --asset <symbol>    Fetch crypto prices from CoinGecko
+                                      [--from MM/dd/yyyy] [--to MM/dd/yyyy]
+      price import <csv>              Import prices from CSV (Date,Symbol,Close)
+                                      [--asset <symbol>]
 
       reset mapping <name> [--force]  Delete a specific mapping and its transactions
 

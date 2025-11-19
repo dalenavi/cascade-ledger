@@ -62,6 +62,7 @@ final class RawFile {
     var sha256Hash: String // For deduplication
     var content: Data // Raw file content
     var mimeType: String
+    var isArchived: Bool = false // Archive instead of delete
 
     @Relationship(deleteRule: .nullify)
     var importBatches: [ImportBatch]
@@ -78,6 +79,7 @@ final class RawFile {
         self.fileSize = Int64(content.count)
         self.sha256Hash = content.sha256Hash()
         self.mimeType = mimeType
+        self.isArchived = false
         self.importBatches = []
         self.sourceRows = []
         self.uploadedAt = Date()

@@ -32,9 +32,14 @@ class CoinGeckoService {
 
         let (data, response) = try await URLSession.shared.data(from: requestURL)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw PriceAPIError.apiError("CoinGecko returned error")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PriceAPIError.apiError("Invalid response")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "No response body"
+            print("CoinGecko error (status \(httpResponse.statusCode)): \(responseBody)")
+            throw PriceAPIError.apiError("CoinGecko returned status \(httpResponse.statusCode): \(responseBody)")
         }
 
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
